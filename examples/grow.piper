@@ -1,0 +1,33 @@
+;; 自我生长的活程序(需要 llm CLI,默认 deepseek-v4-pro)。
+;; 运行:make run FILE=examples/grow.piper
+;;
+;; 程序一开始几乎什么都不会。我们用自然语言让它给自己写能力;每个新能力都装进
+;; 运行时镜像,并且**可以调用之前长出来的能力**(复利组合)。坏的实现会被事务回滚。
+;; 最终这个镜像——多个互相组合、各自验证过的自写函数——是单次 LLM 调用产生不了的。
+
+(display "== 程序开始自我生长 ==\n")
+
+;; 1) 最底层能力
+(learn! 'greet "把一个名字变成中文问候语,例如 \"Alice\" 得到 \"你好,Alice!\""
+        (lambda () (string=? (greet "Alice") "你好,Alice!"))
+        3)
+
+;; 2) 复用 greet —— 组合
+(learn! 'greet-all "对一个名字列表逐个问候,返回问候语组成的列表(请复用已有的 greet)"
+        (lambda () (equal? (greet-all (list "Bob" "Cara"))
+                           (list "你好,Bob!" "你好,Cara!")))
+        3)
+
+;; 3) 复用 greet-all,再加统计 —— 在组合之上继续组合
+(learn! 'announce "对一群人发问候并统计人数,返回 (问候语列表 . 人数)(请复用 greet-all)"
+        (lambda () (let ((r (announce (list "X" "Y" "Z"))))
+                     (and (= (cdr r) 3) (equal? (car r) (list "你好,X!" "你好,Y!" "你好,Z!")))))
+        3)
+
+(newline)
+(display "== 它给自己长出来的能力(注意后者调用前者)==\n")
+(display (skills->string))
+
+(newline)
+(display "== 跑一下完全由它自己写出、层层组合的能力 ==\n")
+(display (announce (list "张三" "李四" "王五"))) (newline)
