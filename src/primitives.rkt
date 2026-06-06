@@ -91,4 +91,7 @@
   (def! '->string (lambda (x) (format "~a" x)))   ; display 风格
   (def! 'repr     (lambda (x) (format "~s" x)))   ; write 风格(适合 s-expr)
 
+  ;; 宿主定时器(M5 loop 的 #:every / self-paced delay 用)
+  (def! 'sleep (lambda (secs) (sleep secs) (void)))
+
   g)

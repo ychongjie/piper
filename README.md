@@ -12,7 +12,7 @@
 
 技术栈:**Racket + 原生 `call/cc` + [`llm`](https://github.com/simonw/llm) CLI 作为 LLM 原语**。
 
-状态:**M0–M4 完成**(求值器 + continuation + LLM 接入 + 宏/amb 回溯 + goal 目标循环)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
+状态:**M0–M5 完成**(求值器 + continuation + LLM + 宏/amb + goal 目标循环 + loop 重入)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
 
 ## 快速上手
 
@@ -44,4 +44,8 @@ M4 实现 `goal`:LLM 驱动的目标循环(观察→生成下一步→eval→检
 `goal-run`(L2 driver 过程)+ `goal`(L3 clause 薄宏),纯库代码 `lib/agent.piper`,
 见 `examples/goal.piper`(真实 LLM,含错误自恢复)。
 
-`loop`、`redefine!` 自修改在后续里程碑(M5+)。
+M5 实现 `loop`:`(times N)` / `(until PRED [every S])` / `(self-paced)` 重入,用 `call/cc`
+给每轮一个 `break` 续延;自定步由 body 返回的指令 `(continue)`/`(delay s)`/`(stop v)` 决定调度
+——这正是 LLM 控制循环的接口(`lib/loop.piper`,见 `examples/loop.piper`)。
+
+`redefine!` 运行时自修改在后续里程碑(M6)。

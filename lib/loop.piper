@@ -1,0 +1,70 @@
+;; M5:loop —— 周期 / 条件 / 自定步重入。
+;; 三层模型(DESIGN §5.3):
+;;   L2  loop-times / loop-until / loop-self-paced   driver 过程
+;;   L3  loop                                        薄宏:body thunk 化 + 模式分发
+;; 用 call/cc 给每轮提供一个 break 续延(可提前中断);自定步由 body 返回的指令决定调度。
+;; body 被展开成 (lambda (break) body...) —— break 是当轮可用的中断续延。
+
+;; 重复 n 次,返回最后一次 body 的值(可 break 提前退出)
+(define (loop-times n body)
+  (call/cc
+    (lambda (break)
+      (define (go i last)
+        (if (>= i n) last (go (add1 i) (body break))))
+      (go 0 #t))))
+
+;; 重复直到 done? 为真(每轮前检查);secs>0 时每轮 sleep(周期模式)
+(define (loop-until done? body secs)
+  (call/cc
+    (lambda (break)
+      (define (go)
+        (if (done?)
+            'done
+            (begin (body break)
+                   (if (> secs 0) (sleep secs) #t)
+                   (go))))
+      (go))))
+
+;; 自定步:body 返回一个指令决定下一步 —— 这正是 LLM 决定调度的接口:
+;;   (continue)      下一轮立即继续
+;;   (delay <secs>)  睡 secs 后继续
+;;   (stop <val>)    停止,loop 返回 val
+;; body 同样收到 break(可不用)。
+(define (loop-self-paced body)
+  (call/cc
+    (lambda (break)
+      (define (go)
+        (let ((dir (body break)))
+          (cond
+            ((eq? (car dir) 'stop)     (break (cadr dir)))
+            ((eq? (car dir) 'continue) (go))
+            ((eq? (car dir) 'delay)    (sleep (cadr dir)) (go))
+            (else (error "loop: 未知指令" dir)))))
+      (go))))
+
+;; 在模式列表里找 key 后面的值(用于 (until PRED every SECS))
+(define (mode-after mode key default)
+  (cond ((null? mode) default)
+        ((eq? (car mode) key) (cadr mode))
+        (else (mode-after (cdr mode) key default))))
+
+;; ---- L3:薄宏 ----
+;; (loop (times N)            body...)
+;; (loop (until PRED)         body...)
+;; (loop (until PRED every S) body...)   ; 每轮 sleep S
+;; (loop (every S)            body...)   ; 永久周期(等价 until #f every S)
+;; (loop (self-paced)         body...)   ; body 返回 (continue)/(delay s)/(stop v)
+(define-macro (loop mode . body)
+  (let ((kind  (car mode))
+        (thunk (cons 'lambda (cons '(break) body))))
+    (cond
+      ((eq? kind 'times)
+       (list 'loop-times (cadr mode) thunk))
+      ((eq? kind 'until)
+       (list 'loop-until (list 'lambda '() (cadr mode)) thunk
+             (mode-after mode 'every 0)))
+      ((eq? kind 'every)
+       (list 'loop-until (list 'lambda '() #f) thunk (cadr mode)))
+      ((eq? kind 'self-paced)
+       (list 'loop-self-paced thunk))
+      (else (error "loop: 未知模式" mode)))))

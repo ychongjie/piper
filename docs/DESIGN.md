@@ -336,26 +336,27 @@ goal-run(desc, success?, tools, max-steps):
 - **`history` 是 s-expr 数据**,回灌进 prompt 让 LLM 观察并自我纠错(实测:LLM 在 `(add 29)` 超限报错后,读历史改用 `(add 10)` 系列达成目标)。
 - 后续可加 `#:on-fail 'ask-human`(用 continuation 挂起等人)、子 goal、predicate 之外的预算约束(token/时间)。
 
-### 8.4 `loop`(周期 / 自定步重入)
+### 8.4 `loop`(周期 / 自定步重入)✅ 已实现(`lib/loop.piper`)
 
 > 灵感来自 Claude Code 的 `/loop`:把一个任务按间隔或自定步反复执行。
 
+**实现采用 clause 语法**(同 goal 的理由;`mode` 是第一个子形式,其余是 body):
+
 ```scheme
-;; 固定间隔
-(loop #:every 5min
-  (when (new-pr?) (review-latest-pr)))
-
-;; 条件直到
-(loop #:until (deployed?)
-  (check-ci) (sleep 30sec))
-
-;; 自定步:由 LLM 决定下次何时、带什么上下文重入(对应 /loop 不带间隔)
-(loop #:self-paced
-  (define next (review-one-item))
-  (resume-when (llm-code "根据这次结果,返回 (delay <秒>) 或 (stop)" next)))
+(loop (times 5)            (do-step))             ; 重复 N 次
+(loop (until (deployed?))  (check-ci))            ; 直到谓词为真(每轮前检查)
+(loop (until #f every 30)  (poll))                ; 每 30s 周期执行
+(loop (self-paced)                                ; 自定步:body 返回指令决定调度
+  (set! x (* x 2))
+  (llm-code "x 大于 100 就返回 (stop x) 否则 (continue)"))
 ```
 
-语义:每轮结束**捕获 continuation**;`#:every`/`#:until` 用定时/谓词驱动重入,`#:self-paced` 由 LLM 决定调度。进程内 MVP 用宿主定时器;将来可序列化后,挂起可跨进程持久化(对接 Claude Code 的 ScheduleWakeup/cron 思路)。
+三层落地:
+- **L3 宏 `loop`**:把 body 展开成 `(lambda (break) body...)`(thunk 化是反复求值的前提;`break` 是当轮可用的中断续延),按 `mode` 分发到对应 driver。
+- **L2 driver**:`loop-times` / `loop-until`(带可选 `every` 周期 sleep)/ `loop-self-paced`。每个都用 `call/cc` 捕获一个 `break` 续延,body 可 `(break v)` 提前退出。
+- **自定步即"LLM 决定调度"的接口**:body 返回指令数据 `(continue)` / `(delay secs)` / `(stop val)`——`llm-code` 把模型输出直接 `read` 成这种指令(无需 `eval`),于是 LLM 决定循环是否继续、停多久。实测:翻倍循环 x=2→128,模型每轮返回 `(continue)`,超过阈值返回 `(stop 128)`。
+
+进程内 MVP 用宿主定时器(`sleep` 原语)。将来求值器去函数化、continuation 可序列化后,挂起可跨进程持久化(对接 Claude Code 的 ScheduleWakeup/cron 思路);届时 driver 不变,只是 `break`/续延变成可落盘的数据。
 
 ### 8.5 `redefine!` / `capture` / `restore`(自修改 + 事务)
 
@@ -396,7 +397,7 @@ goal-run(desc, success?, tools, max-steps):
 | **M2 LLM 原语** ✅ | `llm` 子进程 + `ask` + `llm-code` + `eval` + `gen` | `(gen "算 6*7")` → 42;`llm-code` 定义过程后可直接调用 |
 | **M3 amb** ✅ | `define-macro` 宏设施 + `amb`/`require` 回溯(纯库代码)+ `amb*` | 勾股数/约束求解通过;`amb*` 在运行时列表(可为 LLM 候选)间回溯 |
 | **M4 goal** ✅ | `goal-run`(L2 过程)+ `goal`(L3 宏)+ step 循环 + 每步快照回滚 + `eval-in` 工具白名单 | 玩具 goal(累加到目标)真实 LLM 端到端达成,含错误自恢复 |
-| **M5 loop** | `loop` 宏:`#:every` / `#:until` / `#:self-paced` | 周期任务与自定步任务各跑通一个 demo |
+| **M5 loop** ✅ | `loop`(L3 宏)+ `loop-times/until/self-paced`(L2)+ call/cc break | until/break/self-paced 测试通过;LLM 自定步真实端到端跑通 |
 | **M6 自修改** | `redefine!` + 事务 + 审计 + 安全模型 | agent 自我改写一个过程并在冒烟失败时回滚 |
 
 每个里程碑配示例 + 测试,放 `examples/` 与 `tests/`。

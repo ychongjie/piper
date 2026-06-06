@@ -1,0 +1,32 @@
+;; M5 示例:loop —— 周期/条件/自定步重入。
+;; 运行:make run FILE=examples/loop.piper
+
+;; 1) until:重复直到条件成立
+(define n 0)
+(loop (until (>= n 5))
+  (set! n (add1 n))
+  (display "tick ") (display n) (newline))
+
+;; 2) break:call/cc 提前中断
+(display "first square > 50: ")
+(display
+ (loop (times 100)
+   (set! n (add1 n))
+   (if (> (* n n) 50) (break (* n n)) #f)))
+(newline)
+
+;; 3) self-paced + LLM:由模型决定每轮是否继续(需要 llm CLI)
+;;    每轮把 x 翻倍,问 LLM "超过 100 没?" —— 它返回 (continue) 或 (stop x)。
+(define x 1)
+(display "LLM-paced doubling:\n")
+(define final
+  (loop (self-paced)
+    (set! x (* x 2))
+    (display "  x=") (display x) (newline)
+    ;; llm-code 直接把模型输出 read 成指令数据 (continue)/(stop N),无需再 eval
+    (llm-code
+      (string-append
+        "当前 x=" (number->string x)
+        "。如果 x 大于 100,只返回 (stop " (number->string x) ");"
+        "否则只返回 (continue)。不要解释、不要 markdown。"))))
+(display "stopped at x=") (display final) (newline)
