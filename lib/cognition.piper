@@ -1,0 +1,42 @@
+;; 认知层(llm)= 编排器自己的"脑子"。
+;; 纯、便宜、返回值、无副作用。它【不是被派去干活的 worker】,而是控制平面用来
+;; 【思考】的能力——决策 / 打分 / 提议 / 批判 / 合议。融进 best-of 的裁判、amb 的
+;; 提议者、loop 的调度判断里。与执行层(pi,见 lib/agents.piper)是两个不同层级。
+
+;; 指定模型的一次思考(开源模型在 ~/.../io.datasette.llm 里配)
+(define (ask-model model task) (llm task "" model))
+
+;; ---- 思考动词:供控制平面决策/择优/搜索 ----
+
+;; 给候选按某标准打 0-10 分(best-of 的裁判;解析失败记 0)
+(define (judge criterion x)
+  (let ((n (string->number (string-trim
+             (ask (string-append
+                   "按【" criterion "】给下面内容打一个 0 到 10 的整数分,只输出数字:\n"
+                   (->string x)))))))
+    (if n n 0)))
+
+;; 在若干选项里选一个(返回选中项的文字)
+(define (decide question options)
+  (string-trim (ask (string-append question
+                     "\n候选:" (repr options) "\n只输出其中一个,原样,不要解释。"))))
+
+;; 就一个任务生成 n 个互不相同的候选(amb/fanout 的提议者,返回一个 list)
+(define (propose n task)
+  (eval (llm-code (string-append "针对任务【" task "】给出 " (number->string n)
+                  " 个互不相同的候选,返回一个 Scheme list,每个元素是字符串。"))))
+
+;; 找问题(没有就回 OK)
+(define (critique x)
+  (ask (string-append "指出下面内容的问题;若没有问题只回 OK:\n" (->string x))))
+
+;; ---- 多模型合议(认知层的"评审团":仍是思考,只是多个脑子)----
+
+(define (ensemble models task) (map (lambda (m) (ask-model m task)) models))
+
+(define (vote-ensemble models task)
+  (vote (map (lambda (m) (lambda () (ask-model m task))) models)))
+
+(define (best-ensemble models task criterion)
+  (best-of (map (lambda (m) (lambda () (ask-model m task))) models)
+           (lambda (ans) (judge criterion ans))))

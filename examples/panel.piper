@@ -1,30 +1,18 @@
-;; 开源模型评审团(需要 llm CLI + 几个开源模型已配)。
+;; 开源模型评审团(认知层示例,需要 llm CLI + 几个开源模型已配)。
 ;; 运行:make run FILE=examples/panel.piper
 ;;
-;; 编排器范式:同一问题 fan-out 给一组【开源】模型,各答一版,再让一个裁判模型
-;; 按"准确 + 简洁"打分择优。模型当 worker,语言当控制平面(fan-out + 打分 + 选优);
-;; 全程走你自己的开源端点,不碰付费厂商。多样性来自不同模型——单模型给不了。
+;; 纯【认知层】编排:同一问题 fan-out 给一组开源模型(ensemble),各答一版,
+;; 再用认知层裁判(judge)按"准确+简洁"打分择优。没有副作用、没有 pi——
+;; 这是"多个脑子合议",和执行层(pi 派 agent 干活)是不同层级。
 
 (define models (list "kimi2.6" "deepseek-v4-pro" "deepseek-v4-flash"))
-(define panel (model-workers models))
-
 (define q "用一两句话解释什么是尾递归(tail recursion),要求准确、简洁。")
+(define crit "准确且简洁")
 
-;; 裁判:让一个模型给候选答案打 0-10 分(只取整数,解析失败记 0)
-(define (judge ans)
-  (let ((out (llm (string-append
-                   "下面是对一个问题的回答,请只输出一个 0 到 10 的整数,"
-                   "评价其准确性与简洁性,不要任何其它字符:\n" ans)
-                  "" "deepseek-v4-pro")))
-    (let ((n (string->number (string-trim out)))) (if n n 0))))
-
-;; fan-out:每个开源模型各答一版(3 次调用)
-(define answers (ask-all q panel))
-;; 各自打分(3 次裁判调用)
-(define scored (map (lambda (a) (cons a (judge a))) answers))
+(define answers (ensemble models q))                         ; 各模型各答一版
+(define scored  (map (lambda (a) (cons a (judge crit a))) answers))  ; 裁判打分
 
 (display "== 评审团各模型的回答与得分 ==\n")
-;; (zip models scored) 的元素 p = (模型 . (答案 . 分数))
 (for-each (lambda (p)
             (display "  ") (display (car p))
             (display " [") (display (cdr (cdr p))) (display " 分]: ")

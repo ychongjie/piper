@@ -16,20 +16,22 @@
 - **回溯搜索** `amb` / `require` —— 在 worker 候选间搜索、剪枝(`lib/amb.piper`)
 - **事务** `capture` / `restore` —— 给整段编排打检查点、失败整体回滚
 - **自适应** `redefine!` / `improve!` / `evolve!` —— 编排策略自我进化(`lib/self-modify.piper`)
-- **worker 接口** `ask` / `gen` / `llm-code`(LLM)、`shell`(真 harness/工具)、子 `goal`;统一适配器见 `lib/workers.piper`
+### 两层:认知层(llm)与执行层(pi)——不同层级,不同职能
 
-### worker 后端选型(开源模型友好 + 不额外付费)
+`llm` 和 `pi` **不是同一层的 worker**,它们定位不同:
 
-worker 后端保持中立(`lib/workers.piper`),同一套编排组合子对任意 worker 成立:
+| 层 | 后端 | 是什么 | 性质 | 用来 | 文件 |
+|---|---|---|---|---|---|
+| **认知层** | `llm` | 编排器自己的"脑子" | 纯、便宜、返回值、无副作用 | **想**:决策 / 打分 / 提议 / 批判 / 合议 | `lib/cognition.piper` |
+| **执行层** | `pi` | 被派出去的自主 agent | 重、有工具+循环+副作用 | **干**:在真实环境里完成任务 | `lib/agents.piper` |
 
-| 后端 | 角色 | 开源模型 | 成本 | 用法 |
-|---|---|---|---|---|
-| **`llm`**(默认) | 薄补全 | ✅ 插件接 Ollama/本地/托管开源 | 最低 | `(llm-worker "deepseek-v4-pro")` |
-| **`pi`** | 厚 harness | ✅ `--provider/--model` 任意 | 你自己的开源端点 | `(pi-worker "ollama" "qwen2.5")` |
-| `claude` | 厚 harness | ❌ 锁 Anthropic | ⚠️ 订阅不含 headless,`-p` 计费 | `(claude-worker)`,慎用 |
+**范式:认知层编排执行层。** 用 `llm` 想(派谁、怎么判、何时回溯),用 `pi` 干。
 
-因为默认走 `llm`,Piper 天然能 **fan-out 到一组不同开源模型再 vote/best-of**
-(开源模型评审团,见 `examples/panel.piper`)——多样性来自不同模型,单模型给不了。
+- 认知层(`lib/cognition.piper`):`ask-model` / `judge`(0-10 裁判)/ `decide` / `propose` / `critique`,以及多模型合议 `ensemble` / `vote-ensemble` / `best-ensemble`。融进 `best-of`/`amb`/`loop` 的控制流里。开源模型经 `llm` 插件接(Ollama/本地/托管),fan-out 一组开源模型当评审团是白送的(`examples/panel.piper`)。
+- 执行层(`lib/agents.piper`):`agent`(在沙箱目录派一个 pi 子 agent,返回 `(退出码 . 输出)`)+ 桥接 `best-agent`(派 N 个、认知层裁判择优)/ `dispatch-all` / `verify`(认知层校验执行结果)。`pi --provider/--model` 任意开源模型,工具白名单交给 pi。
+- `claude`/`codex` 也能包成执行层 agent,但锁厂商/计费,默认不用。
+
+> 执行层(pi)需一次性配置 provider。推荐用 pi 的 **Custom Provider** 指到你现有的开源端点(如 SiliconFlow),复用开源模型、不用新 key——见下方「执行层(pi)配置」。
 
 `goal`(目标循环)与 `loop`(周期/自定步重入)是其中两种内建编排模式
 (灵感来自 Claude Code 的 `/goal` 与 `/loop`),非终点。
