@@ -3,18 +3,21 @@
 ;; 核心词:loop (self-paced) —— body 返回 (continue)/(stop v) 自己决定是否继续。
 
 (define topic "一个帮开发者管理 API 密钥的小工具")
-(define draft (ask (fmt "给「{}」写一句产品标语,简短有力,只输出标语本身" topic)))
+(define draft "管理你的 API 密钥的工具")                          ; 故意平庸的初稿
 (define tries 0)
+(define best-draft draft)                                        ; 关键:保留最好的一版
+(define best-score 0)
 
 (define final
   (loop (self-paced)
     (set! tries (add1 tries))
     (define score (judge "吸引人、简洁、点明价值" draft))
+    (when (> score best-score) (set! best-score score) (set! best-draft draft))
     (display (fmt "  [{} 分] {}\n" score draft))
-    (if (or (>= score 8) (>= tries 4))
-        (list 'stop draft)                                       ; 达标 / 到上限 → 停
-        (begin (set! draft (ask (fmt "把这句标语改得更吸引人、更短,只输出标语:{}" draft)))
-               (list 'continue)))))                              ; 否则继续改
+    (if (or (>= best-score 10) (>= tries 4))                     ; 达标 / 到上限 → 停
+        (list 'stop best-draft)                                  ; 返回【最好】的一版
+        (begin (set! draft (ask (fmt "把下面这句标语改得更吸引人、更有记忆点(保持可读,别过度缩写)。只输出改进后的一句标语本身,不要解释,不要给多个版本:\n{}" draft)))
+               (list 'continue)))))
 
 (newline)
-(display (fmt "定稿:{}\n" final))
+(display (fmt "定稿(最佳 {} 分):{}\n" best-score final))
