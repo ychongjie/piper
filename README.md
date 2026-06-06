@@ -31,7 +31,36 @@
 - 执行层(`lib/agents.piper`):`agent`(在沙箱目录派一个 pi 子 agent,返回 `(退出码 . 输出)`)+ 桥接 `best-agent`(派 N 个、认知层裁判择优)/ `dispatch-all` / `verify`(认知层校验执行结果)。`pi --provider/--model` 任意开源模型,工具白名单交给 pi。
 - `claude`/`codex` 也能包成执行层 agent,但锁厂商/计费,默认不用。
 
-> 执行层(pi)需一次性配置 provider。推荐用 pi 的 **Custom Provider** 指到你现有的开源端点(如 SiliconFlow),复用开源模型、不用新 key——见下方「执行层(pi)配置」。
+### 执行层(pi)配置
+
+pi 需要自己的 provider。用 pi 的 **Custom Provider** 指到你现有的 OpenAI 兼容开源端点
+(如 SiliconFlow),复用开源模型、不用新账号。**密钥写在 pi 自己的配置里
+(`~/.pi/agent/models.json`,在仓库之外),绝不进代码仓库。**
+
+`~/.pi/agent/models.json`(`chmod 600`):
+
+```json
+{
+  "providers": {
+    "siliconflow": {
+      "baseUrl": "https://api.siliconflow.cn/v1",
+      "api": "openai-completions",
+      "apiKey": "<你的 key,不要提交>",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [
+        { "id": "deepseek-ai/DeepSeek-V4-Pro" },
+        { "id": "deepseek-ai/DeepSeek-V4-Flash" },
+        { "id": "Pro/moonshotai/Kimi-K2.6" }
+      ]
+    }
+  }
+}
+```
+
+`lib/agents.piper` 的默认即 `*agent-provider* = "siliconflow"`、`*agent-model* =
+"deepseek-ai/DeepSeek-V4-Pro"`。验证:`agent` 会在子进程里 `env -u *_proxy` 后调用
+`pi`(httpx 走 SOCKS 需 socksio,直连更省事)。实测 pi agent 能在沙箱目录用 `read`/`bash`
+工具完成任务。
 
 `goal`(目标循环)与 `loop`(周期/自定步重入)是其中两种内建编排模式
 (灵感来自 Claude Code 的 `/goal` 与 `/loop`),非终点。

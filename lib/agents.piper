@@ -14,10 +14,12 @@
 
 ;; agent:在工作目录 dir 里派一个 pi 子 agent 去完成 task。
 ;; 返回 (退出码 . 输出)。重:自带工具+循环+副作用。
+;; env -u 剥掉 *_proxy:pi(httpx)走 SOCKS 需 socksio,直连更省事(与 llm 一致)
 (define (agent dir task)
   (shell (string-append
           "cd " (shell-quote dir)
-          " && pi -p --no-session --mode text"
+          " && env -u all_proxy -u http_proxy -u https_proxy"
+          " pi -p --no-session --mode text"
           " --provider " *agent-provider* " --model " *agent-model*
           " --tools " *agent-tools* " "
           (shell-quote task))))
