@@ -5,7 +5,12 @@
 ;; 用 Piper 自身写在 lib/prelude.piper 里(以此检验求值器)。
 
 (require "env.rkt" "eval.rkt")
-(provide make-global-env)
+(provide make-global-env (struct-out checkpoint))
+
+;; 状态检查点:全局环境某一刻的快照(纯数据)。
+;; 与控制无关——控制跳转由 call/cc 负责;capture/restore 只管"状态"。
+;; 这是事务性自修改(M6)与 amb 回溯(M3)的状态回滚基石。
+(struct checkpoint (vars) #:transparent)
 
 (define (make-global-env)
   (define g (make-env))
@@ -31,7 +36,14 @@
   (def! 'eq? eq?) (def! 'eqv? eqv?) (def! 'equal? equal?)
   (def! 'not (lambda (x) (eq? x #f)))
   (def! 'symbol? symbol?) (def! 'string? string?) (def! 'boolean? boolean?)
-  (def! 'procedure? (lambda (x) (or (closure? x) (primitive? x))))
+  (def! 'procedure? (lambda (x) (or (closure? x) (primitive? x) (continuation? x))))
+
+  ;; 状态检查点(全局环境快照)。restore 是整体替换:
+  ;; capture 之后新增的顶层绑定会被回滚掉(真正的事务语义)。
+  (def! 'capture (lambda () (checkpoint (hash-copy (env-vars g)))))
+  (def! 'restore (lambda (cp)
+                   (set-env-vars! g (hash-copy (checkpoint-vars cp)))
+                   (void)))
 
   ;; 字符串
   (def! 'string-append string-append)

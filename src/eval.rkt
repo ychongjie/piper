@@ -11,6 +11,7 @@
 
 (provide (struct-out closure)
          (struct-out primitive)
+         (struct-out continuation)
          peval papply
          truthy?)
 
@@ -18,6 +19,8 @@
 (struct closure (params body env) #:transparent)
 ;; 原语:名字 + 宿主 Racket 过程
 (struct primitive (name proc) #:transparent)
+;; 一等 continuation:包住宿主 Racket 续延;作为可应用对象(见 papply)
+(struct continuation (k) #:transparent)
 
 (define (self-eval? x)
   (or (number? x) (string? x) (boolean? x) (char? x)))
@@ -43,6 +46,7 @@
        [(cond)   (eval-cond (cdr exp) env)]
        [(and)    (eval-and (cdr exp) env)]
        [(or)     (eval-or  (cdr exp) env)]
+       [(call/cc call-with-current-continuation) (eval-callcc exp env)]
        [else     (eval-app exp env)])]
     [(null? exp) (error 'piper "cannot evaluate empty combination ()")]
     [else (error 'piper "cannot evaluate: ~s" exp)]))
@@ -106,6 +110,15 @@
     [else (define v (peval (car exps) env))
           (if (truthy? v) v (eval-or (cdr exps) env))]))
 
+;; (call/cc f) —— 唯一的特权控制特殊形式(docs/DESIGN.md §5.3、§6)。
+;; 直接委托宿主 call/cc:解释递归跑在宿主栈上,宿主捕获的续延即 Piper 续延,
+;; 不写 CPS 即得一等 continuation。f 应是单参过程,收到一个 Piper continuation。
+(define (eval-callcc exp env)
+  (define f (peval (cadr exp) env))
+  (call-with-current-continuation
+   (lambda (host-k)
+     (papply f (list (continuation host-k))))))
+
 ;; ---- 函数应用 ----------------------------------------------------------
 
 (define (eval-app exp env)
@@ -119,4 +132,5 @@
     [(closure? proc)
      (eval-seq (closure-body proc)
                (extend-env (closure-params proc) args (closure-env proc)))]
+    [(continuation? proc) (apply (continuation-k proc) args)]
     [else (error 'piper "not applicable: ~s" proc)]))

@@ -217,6 +217,16 @@ MVP:**Piper 的 `call/cc` 直接委托宿主 Racket 的 `call/cc`**。因为解�
 
 衍生能力:`amb` 回溯、`goal` 的搜索、工具/审批前的挂起,统统建在它上面。
 
+### 6.1 `capture` / `restore`:状态检查点(与控制正交)
+
+`capture`/`restore` **只管状态,不管控制**——控制跳转一律由 `call/cc` 负责。两者正交组合,才是干净的分解:
+
+- `(capture)` → 返回一个 checkpoint,内含**全局环境某一刻的快照**(纯数据值)。
+- `(restore cp)` → 把全局环境**整体替换**回快照。这是真正的事务语义:`capture` 之后新增的顶层绑定会一并被回滚掉。
+- **不做控制跳转**:`restore` 之后代码线性继续。需要"跳回某点重试"时,用 `call/cc` 捕获续延(`amb` 即如此:用 `call/cc` 记跳点 + `capture/restore` 滚状态)。
+
+事务性自修改(M6)与 `amb` 回溯(M3)都建立在这一对原语上。MVP 只快照全局 frame(局部状态由 continuation 承载)。
+
 **升级路径(非 MVP)**:当需要"挂起数小时 / 跨进程恢复 / 抗崩溃"时,把直接风格求值器**去函数化**成显式栈解释器,continuation 成为可序列化的数据结构。届时语义层(goal/loop/amb/redefine!)无需改动——这是第 2 节"平滑升级"原则的兑现。
 
 ---
@@ -335,17 +345,16 @@ GOAL(desc, success?, tools, max-steps):
 
 ```scheme
 ;; 事务性自修改:坏了能回滚
-(define ckpt (capture))                       ; 抓 continuation + 全局 env 快照
+(define ckpt (capture))                       ; 抓全局 env 快照(纯状态,见 §6.1)
 (redefine! 'review-latest-pr
   (llm-code "根据最近 3 次失败改进这个过程,返回新的 lambda"
             (procedure-source review-latest-pr)
             (recent-failures 3)))
-(unless (smoke-test-ok?) (restore ckpt))      ; 冒烟不过 → 回到改之前
+(unless (smoke-test-ok?) (restore ckpt))      ; 冒烟不过 → 整体回滚到改之前
 ```
 
-- `capture`:返回一个包含「全局 env 快照 + 当前 continuation」的检查点对象。
-- `restore`:换回 env 快照并跳回 continuation(用 call/cc)。
-- `redefine!`:改写全局 frame 里的绑定;`procedure-source` 取闭包源(因同像性,源就是 s-expr)。
+- `capture`/`restore`:状态检查点(§6.1),只滚全局环境、不做控制跳转;`restore` 后线性继续。**M1 已实现。**
+- `redefine!`:改写全局 frame 里的绑定;`procedure-source` 取闭包源(因同像性,源就是 s-expr)。(M6)
 
 ---
 
@@ -366,8 +375,8 @@ GOAL(desc, success?, tools, max-steps):
 
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
-| **M0 求值器** | reader(复用 Racket)+ env + eval/apply + 基本特殊形式 | 能跑 `(define (fact n) ...)` 等纯 Scheme |
-| **M1 continuation** | `call/cc` 委托宿主 + `capture`/`restore` | 能用 call/cc 实现 generator;能快照/回滚全局 env |
+| **M0 求值器** ✅ | reader(复用 Racket)+ env + eval/apply + 基本特殊形式 | 能跑 `(define (fact n) ...)` 等纯 Scheme |
+| **M1 continuation** ✅ | `call/cc` 委托宿主 + `capture`/`restore` | 能用 call/cc 实现 generator;能快照/回滚全局 env |
 | **M2 LLM 原语** | `llm` 子进程 + `ask` + `llm-code` + prompt 渲染 | `(eval (llm-code "写个加法") env)` 生成即运行 |
 | **M3 amb** | `amb`/`require` 回溯 + LLM 驱动的 `amb*` | SICP 经典 amb 谜题通过;LLM 候选回溯通过 |
 | **M4 goal** | `goal-driver`(过程)+ step 循环 + 回溯 + 工具白名单 | 一个玩具 goal(如"让某测试通过")端到端达成 |
