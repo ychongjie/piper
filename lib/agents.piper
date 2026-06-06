@@ -9,7 +9,7 @@
 
 (define *agent-provider* "siliconflow")
 (define *agent-model*    "deepseek-ai/DeepSeek-V4-Pro")
-(define *agent-tools*    "read,bash")              ; 交给 pi 的能力白名单
+(define *agent-tools*    "read,write,edit,bash")   ; 交给 pi 的能力白名单(编码 agent 需写/改)
 
 ;; 双模式:(agent dir) 当 worker;(agent dir 任务) 直接派一次(省双层括号)。
 ;; env -u 剥 *_proxy(httpx 走 SOCKS 需 socksio,直连更省事,与 llm 一致)。
