@@ -525,3 +525,33 @@ loop every 1h:
 ```
 
 这段集齐了 Piper 想证明的一切:**嵌套组合**(`loop ⊃ fan ⊃ best ⊃ agent ⊃ goal`)、**两层 worker**(`agent` 干 / 认知裁判选)、**真实反馈 + 择优**、以及(`settle`)**frontier→scaffold 自改进**。固定功能的 harness 表达不出这种"可当程序的编排"。
+
+---
+
+## 13. 执行层(pi)配置(附录)
+
+pi 需要自己的 provider。用 pi 的 **Custom Provider** 指到你现有的 OpenAI 兼容开源端点
+(如 SiliconFlow),复用开源模型、不用新账号。**密钥写在 `~/.pi/agent/models.json`
+(仓库之外,`chmod 600`),绝不进代码仓库。**
+
+```json
+{
+  "providers": {
+    "siliconflow": {
+      "baseUrl": "https://api.siliconflow.cn/v1",
+      "api": "openai-completions",
+      "apiKey": "<你的 key,不要提交>",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [
+        { "id": "deepseek-ai/DeepSeek-V4-Pro" },
+        { "id": "deepseek-ai/DeepSeek-V4-Flash" },
+        { "id": "Pro/moonshotai/Kimi-K2.6" }
+      ]
+    }
+  }
+}
+```
+
+`lib/agents.piper` 默认 `*agent-provider* = "siliconflow"`、`*agent-model* =
+"deepseek-ai/DeepSeek-V4-Pro"`;`agent` 调 pi 前 `env -u *_proxy`(httpx 走 SOCKS 需
+socksio,直连更省事)。实测 pi agent 能在沙箱目录用 `read`/`bash`/`edit`/`write` 完成任务。
