@@ -23,8 +23,16 @@
   (parameterize ([current-llm (lambda (p s m) out)])
     (eval-string src (make-interpreter))))
 
-;; ---- model:认知 worker ----
-(check-equal? (E/models '(("m1" . "hi")) "((model \"m1\") \"q\")") "hi")
+;; ---- model:认知 worker(双模式)----
+(check-equal? (E/models '(("m1" . "hi")) "((model \"m1\") \"q\")") "hi")  ; 当 worker
+(check-equal? (E/models '(("m1" . "hi")) "(model \"m1\" \"q\")") "hi")    ; 直接问一次
+
+;; ---- best 接受标准字符串当 score(自动用 judge)----
+;; mock:a/b 模型给答案,默认模型(judge)恒返回 9 → 平分,取第一个
+(check-equal?
+ (E/models '(("a" . "答A") ("b" . "答B") ("deepseek-v4-pro" . "9"))
+           "(best (map model (list \"a\" \"b\")) \"q\" \"准确\")")
+ "答A")
 
 ;; ---- model 与控制平面咬合:fan-out / vote 直接用 (map model …) ----
 (check-equal?

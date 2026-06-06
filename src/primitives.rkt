@@ -59,6 +59,17 @@
   (def! 'string-ref string-ref)
   (def! 'string=? string=?)
   (def! 'string-trim string-trim)
+  ;; fmt:模板插值,把每个 {} 依次替换成参数(取代啰嗦的 string-append)
+  (def! 'fmt
+        (lambda (tmpl . args)
+          (let loop ([ps (string-split tmpl "{}" #:trim? #f)] [as args] [acc ""])
+            (cond
+              [(null? ps) acc]
+              [(null? (cdr ps)) (string-append acc (car ps))]
+              [else (loop (cdr ps)
+                          (if (null? as) '() (cdr as))
+                          (string-append acc (car ps)
+                                         (if (null? as) "" (format "~a" (car as)))))]))))
   ;; 把字符串安全地包成单引号 shell 参数(供 shell 调真 harness/工具用)
   (def! 'shell-quote (lambda (s) (string-append "'" (string-replace s "'" "'\\''") "'")))
 

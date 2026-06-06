@@ -10,7 +10,11 @@
 ;; (ask 在 prelude:用默认模型;judge/propose 是 ask/llm-code 之上的常用包装,
 ;;  本身可当 best 的 score、amb* 的候选,与控制平面咬合。)
 
-(define (model name) (lambda (task) (llm task "" name)))
+;; 双模式:(model 名字) 当 worker;(model 名字 任务) 直接问一次(省双层括号)
+(define (model name . task)
+  (if (null? task)
+      (lambda (t) (llm t "" name))
+      (llm (car task) "" name)))
 
 ;; 给内容按某标准打 0-10 分(给 best 当 score);解析失败记 0
 (define (judge criterion x)

@@ -11,14 +11,15 @@
 (define *agent-model*    "deepseek-ai/DeepSeek-V4-Pro")
 (define *agent-tools*    "read,bash")              ; 交给 pi 的能力白名单
 
-;; agent:在工作目录 dir 派一个 pi 子 agent 的 worker。
+;; 双模式:(agent dir) 当 worker;(agent dir 任务) 直接派一次(省双层括号)。
 ;; env -u 剥 *_proxy(httpx 走 SOCKS 需 socksio,直连更省事,与 llm 一致)。
-(define (agent dir)
-  (lambda (task)
+(define (agent dir . task)
+  (define (run t)
     (shell (string-append
             "cd " (shell-quote dir)
             " && env -u all_proxy -u http_proxy -u https_proxy"
             " pi -p --no-session --mode text"
             " --provider " *agent-provider* " --model " *agent-model*
             " --tools " *agent-tools* " "
-            (shell-quote task)))))
+            (shell-quote t))))
+  (if (null? task) (lambda (t) (run t)) (run (car task))))

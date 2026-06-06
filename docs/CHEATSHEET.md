@@ -16,10 +16,10 @@ make test                          # 测试
 
 | 组 | 名字 | 签名 / 作用 | 例 |
 |---|---|---|---|
-| worker 构造 | `model` | `(model 名字)` → 认知 worker,结果是文本 | `((model "deepseek-v4-pro") "解释尾递归")` |
-| | `agent` | `(agent 目录)` → 执行 worker(pi 子 agent),结果 `(退出码 . 输出)` | `((agent "./sb") "修 bug")` |
+| worker 构造 | `model` | `(model 名字)` → worker;`(model 名字 任务)` 直接问一次 | `(model "deepseek-v4-pro" "解释尾递归")` |
+| | `agent` | `(agent 目录)` → worker;`(agent 目录 任务)` 直接派一次 | `(agent "./sb" "修 bug")` |
 | 控制平面 | `fan-out` | `(fan-out workers task)` → 全部结果 | `(fan-out (map model ms) q)` |
-| | `best` | `(best workers task score)` → 按分最优 | `(best ws q (lambda (a) (judge "准确" a)))` |
+| | `best` | `(best workers task score)` → 最优;**score 可直接写标准字符串**(自动 judge) | `(best ws q "准确且简洁")` |
 | | `vote` | `(vote workers task)` → 多数表决 | `(vote (map model ms) q)` |
 | | `amb` / `require` | 回溯搜索;`amb*` 对列表;`require` 假则回溯 | `(let ((x (amb* cs))) (require (ok? x)) x)` |
 | | `loop` | 迭代:`(until p)`/`(times n)`/`(every s)`/`(self-paced)` | `(loop (until (green?)) (一轮))` |
@@ -67,12 +67,13 @@ null?  pair?  number?  string?  symbol?  procedure?
 ```
 **字符串**(拼 prompt / 解析输出)
 ```
+fmt("按思路:{}" idea —— {} 依次插值,取代 string-append)
 string-append  number->string  string->number  string-trim
 ->string(display 风格)   repr(write 风格,适合 s-expr)
 ```
 **真实世界 / 元**
 ```
-shell  read-file  write-file  read-files  file-exists?    ; 真实反馈 / 上下文
+shell  shell-ok?(退出码 0?)  read-file  write-file  read-files  file-exists?
 capture  restore                                          ; 事务(Piper 自身状态)
 redefine!  improve!  evolve!                              ; 运行时自修改
 eval  llm-code  procedure-source  try                     ; 求值 / 模型输出→数据 / 安全调用
@@ -88,20 +89,21 @@ eval  llm-code  procedure-source  try                     ; 求值 / 模型输�
 ## 三个完整小例
 
 ```scheme
-;; 1. 多模型合议:fan-out 一组 model,judge 择优
+;; 1. 多模型合议:fan-out 一组 model,标准字符串直接当 score
 (best (map model (list "deepseek-v4-pro" "kimi2.6" "deepseek-v4-flash"))
       "用一句话解释尾递归"
-      (lambda (a) (judge "准确且简洁" a)))
+      "准确且简洁")
 
 ;; 2. 回溯搜索:认知提候选 → 执行做 → 真实验证 → 不行回溯
-(let ((idea (amb* (propose 4 "修复 slugify 的不同思路"))))
-  ((agent "./sandbox") (string-append "按这个思路实现:" idea))
-  (require (= 0 (car (shell "cd sandbox && python3 -m pytest -q"))))
-  idea)
+;;    (idea 是 amb* 当前选中的候选思路;失败 require 触发回溯换下一个)
+(define idea (amb* (propose 4 "修复 slugify 的不同思路")))
+(agent "sandbox" (fmt "按这个思路实现:{}" idea))
+(require (shell-ok? "cd sandbox && python3 -m pytest -q"))
+idea
 
 ;; 3. 参考本地代码再提方案(边界规则)
-(propose 3 (string-append "给出修复以下代码的 3 个思路:\n"
-                          (read-files (list "sandbox/solution.py"))))
+(propose 3 (fmt "给出修复以下代码的 3 个思路:\n{}"
+                (read-files (list "sandbox/solution.py"))))
 ```
 
 完整原语清单见 `src/primitives.rkt`;设计与定位见 `docs/DESIGN.md`;可跑示例见 `examples/`。

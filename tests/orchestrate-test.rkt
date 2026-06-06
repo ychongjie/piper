@@ -32,7 +32,15 @@
             (list (string? s) (> (string-length s) 5)))")
  '(#t #t))
 
-;; ---- shell ----
+;; ---- shell / shell-ok? ----
 (check-equal? (E "(car (shell \"exit 0\"))") 0)
 (check-equal? (E "(car (shell \"exit 4\"))") 4)
 (check-equal? (E "(cdr (shell \"printf done\"))") "done")
+(check-equal? (E "(shell-ok? \"exit 0\")") #t)
+(check-equal? (E "(shell-ok? \"exit 1\")") #f)
+
+;; ---- fmt:模板插值 ----
+(check-equal? (E "(fmt \"a{}b{}c\" 1 2)") "a1b2c")
+(check-equal? (E "(fmt \"{}!\" \"hi\")") "hi!")
+(check-equal? (E "(fmt \"无占位符\")") "无占位符")
+(check-equal? (E "(fmt \"x={}\" (+ 1 2))") "x=3")
