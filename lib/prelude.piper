@@ -51,3 +51,10 @@
 
 (define (last xs)
   (if (null? (cdr xs)) (car xs) (last (cdr xs))))
+
+;; ---- M2:LLM 接入 ----
+;; (llm prompt) / (llm-code prompt) / (eval expr) 是原语;这里加便捷封装。
+
+(define (ask q) (llm q))            ; 自然语言问答,返回字符串
+
+(define (gen prompt) (eval (llm-code prompt)))  ; LLM 生成 s-expr 并立即运行

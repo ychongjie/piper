@@ -12,7 +12,7 @@
 
 技术栈:**Racket + 原生 `call/cc` + [`llm`](https://github.com/simonw/llm) CLI 作为 LLM 原语**。
 
-状态:**M0–M1 完成**(纯 Scheme 子集求值器 + 一等 continuation)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
+状态:**M0–M2 完成**(求值器 + 一等 continuation + LLM 接入)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
 
 ## 快速上手
 
@@ -31,4 +31,9 @@ prelude(`map / filter / foldl / range / append / reverse ...`,见 `lib/prelude.p
 M1 新增唯一的特权控制特殊形式 `call/cc`(委托宿主,一等 continuation),
 以及状态检查点 `capture`/`restore`(全局环境快照 + 事务性回滚,见 `examples/control.piper`)。
 
-LLM 接入(`ask`/`llm`)、`amb` 回溯、`goal`/`loop` 在后续里程碑(M2+)。
+M2 把 LLM 编织进求值器:`ask`(问答)、`llm-code`(LLM 文本 → 可 eval 的 s-expr)、
+`gen`(生成即运行)。需要 [`llm`](https://github.com/simonw/llm) CLI(默认模型
+`deepseek-v4-pro`,可 `parameterize current-model` 切换),见 `examples/ai.piper`。
+spawn 子进程时会自动为其剥掉 `*_proxy` 变量,正常 `make run` 即可。
+
+`amb` 回溯、`goal`/`loop`、`redefine!` 自修改在后续里程碑(M3+)。

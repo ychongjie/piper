@@ -1,0 +1,15 @@
+;; M2 真实端到端示例(需要 llm CLI;默认模型 deepseek-v4-pro)。
+;; 运行:make run FILE=examples/ai.piper
+;; 注意:输出依赖真实模型,具有不确定性。
+
+;; 1) 自然语言问答
+(display "Q: 什么是同像性?") (newline)
+(display "A: ") (display (ask "用一句话解释编程语言的'同像性',中文,不超过40字")) (newline)
+(newline)
+
+;; 2) 让 LLM 生成表达式并立即求值(生成即运行)
+(display "gen (6*7) => ") (display (gen "只返回一个计算 6 乘以 7 的 Scheme 表达式")) (newline)
+
+;; 3) 让 LLM 写一个过程,定义进环境后直接调用 —— 同像性闭环
+(eval (llm-code "定义一个名为 cube 的单参过程,返回参数的立方"))
+(display "cube 5 => ") (display (cube 5)) (newline)

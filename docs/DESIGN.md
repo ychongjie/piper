@@ -255,6 +255,14 @@ MVP:**Piper 的 `call/cc` 直接委托宿主 Racket 的 `call/cc`**。因为解�
 
 多 provider / 本地模型 / 日志(SQLite)全由 `llm` CLI 的插件体系承担,Piper 不重复造。
 
+### 7.1 M2 实现要点(已落地,见 `src/llm.rkt`)
+
+- **backend 可注入**:`current-llm` 参数 `(prompt system model) -> string`,默认走真实子进程;测试注入 mock,不打真网络(`tests/m2-test.rkt`)。
+- **默认模型** `current-model = "deepseek-v4-pro"`(SiliconFlow,经 `llm` CLI 配置);可 `parameterize` 切换(如 `kimi2.6`)。
+- **代理处理**:spawn `llm` 时为**子进程**剥掉 `*_proxy` 变量(`current-strip-proxy`)。因 httpx 走 SOCKS 需 `socksio`,直连更省事;用户照常 `make run` 无需手动 `env -u`。
+- **围栏清洗**:`strip-fences` 去掉模型偶发的 ```` ```lang ... ``` ````,再 `read` 成一棵 s-expr。
+- **Piper 原语**:`llm` / `llm-code` / `eval`(默认在全局环境)/ `current-env`(M2 简化为全局);prelude 里 `ask`=问答、`gen`=生成即运行。
+
 ---
 
 ## 8. Agent 层语义
@@ -377,7 +385,7 @@ GOAL(desc, success?, tools, max-steps):
 |---|---|---|
 | **M0 求值器** ✅ | reader(复用 Racket)+ env + eval/apply + 基本特殊形式 | 能跑 `(define (fact n) ...)` 等纯 Scheme |
 | **M1 continuation** ✅ | `call/cc` 委托宿主 + `capture`/`restore` | 能用 call/cc 实现 generator;能快照/回滚全局 env |
-| **M2 LLM 原语** | `llm` 子进程 + `ask` + `llm-code` + prompt 渲染 | `(eval (llm-code "写个加法") env)` 生成即运行 |
+| **M2 LLM 原语** ✅ | `llm` 子进程 + `ask` + `llm-code` + `eval` + `gen` | `(gen "算 6*7")` → 42;`llm-code` 定义过程后可直接调用 |
 | **M3 amb** | `amb`/`require` 回溯 + LLM 驱动的 `amb*` | SICP 经典 amb 谜题通过;LLM 候选回溯通过 |
 | **M4 goal** | `goal-driver`(过程)+ step 循环 + 回溯 + 工具白名单 | 一个玩具 goal(如"让某测试通过")端到端达成 |
 | **M5 loop** | `loop` 宏:`#:every` / `#:until` / `#:self-paced` | 周期任务与自定步任务各跑通一个 demo |
