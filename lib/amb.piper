@@ -1,0 +1,45 @@
+;; M3:非确定性求值与回溯(amb / require)。
+;; 三层模型(DESIGN §5.3):唯一控制原语是 call/cc;amb 全部是库代码——
+;; 一个失败续延栈 + 一层 define-macro 把候选惰性化。amb 因此可被 redefine!。
+
+;; 失败续延栈:栈顶是"最近的可回溯点"。底部哨兵表示无解。
+(define *amb-fail* (list (lambda () (error "amb: 所有选择已耗尽"))))
+
+(define (amb-fail)
+  (let ((f (car *amb-fail*)))
+    (set! *amb-fail* (cdr *amb-fail*))   ; 先弹出,避免重复触发
+    (f)))
+
+(define (amb-push! thunk)
+  (set! *amb-fail* (cons thunk *amb-fail*)))
+
+;; 在一组 thunk 候选间非确定性选择(McCarthy amb via call/cc + 失败栈)。
+;; 试第一个候选并经 succeed 逃逸;回溯时 retry 让 for-each 推进到下一个候选。
+(define (amb-thunks alts)
+  (call/cc
+    (lambda (succeed)
+      (for-each
+        (lambda (alt)
+          (call/cc
+            (lambda (retry)
+              (amb-push! (lambda () (retry #f)))
+              (succeed (alt)))))
+        alts)
+      (amb-fail))))                       ; 本层候选耗尽 -> 向上回溯
+
+;; (require pred):谓词不成立则回溯
+(define (require pred) (if pred #t (amb-fail)))
+
+;; (amb e ...) 语法糖:把每个候选包成 thunk(惰性求值是回溯的前提)
+(define-macro (amb . alts)
+  (list 'amb-thunks
+        (cons 'list (map (lambda (e) (list 'lambda '() e)) alts))))
+
+;; amb* :在一个运行时列表(如 LLM 生成的候选 (amb* (eval (llm-code ...))))间选择
+(define (amb* lst)
+  (amb-thunks (map (lambda (v) (lambda () v)) lst)))
+
+;; 便捷:在区间 [lo, hi] 内非确定性取一个整数
+(define (an-integer-between lo hi)
+  (require (<= lo hi))
+  (amb lo (an-integer-between (add1 lo) hi)))

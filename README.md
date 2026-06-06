@@ -12,7 +12,7 @@
 
 技术栈:**Racket + 原生 `call/cc` + [`llm`](https://github.com/simonw/llm) CLI 作为 LLM 原语**。
 
-状态:**M0–M2 完成**(求值器 + 一等 continuation + LLM 接入)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
+状态:**M0–M3 完成**(求值器 + 一等 continuation + LLM 接入 + 宏与 amb 回溯)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
 
 ## 快速上手
 
@@ -36,4 +36,7 @@ M2 把 LLM 编织进求值器:`ask`(问答)、`llm-code`(LLM 文本 → 可 eval
 `deepseek-v4-pro`,可 `parameterize current-model` 切换),见 `examples/ai.piper`。
 spawn 子进程时会自动为其剥掉 `*_proxy` 变量,正常 `make run` 即可。
 
-`amb` 回溯、`goal`/`loop`、`redefine!` 自修改在后续里程碑(M3+)。
+M3 新增 `define-macro`(宏设施,「小核心库生长」的引擎),并用它把 `amb`/`require`/`amb*`
+回溯写成**纯库代码**(`lib/amb.piper`,仅依赖 `call/cc`),见 `examples/amb.piper`。
+
+`goal`/`loop`、`redefine!` 自修改在后续里程碑(M4+)。

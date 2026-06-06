@@ -12,13 +12,22 @@
          (all-from-out "eval.rkt")
          (all-from-out "env.rkt"))
 
-(define-runtime-path prelude-path "../lib/prelude.piper")
+(define-runtime-path lib-dir "../lib")
 
-;; 依次 read 并求值 port 中的所有顶层表达式,返回最后一个值
+;; 标准库按顺序加载(后者可依赖前者)
+(define lib-files '("prelude.piper" "amb.piper"))
+
+;; 先把所有顶层 form 读进列表,再依次求值,返回最后一个值。
+;; 关键:读到列表后,回溯(amb)跳回前面的 form 时,续延持有的是不可变的
+;; 列表尾(cdr fs),约束会被重新求值;若从可变 port 逐个读则会"读过头"。
+(define (read-all port)
+  (let loop ([acc '()])
+    (define f (read port))
+    (if (eof-object? f) (reverse acc) (loop (cons f acc)))))
+
 (define (eval-all port env)
-  (let loop ([last (void)])
-    (define form (read port))
-    (if (eof-object? form) last (loop (peval form env)))))
+  (let loop ([fs (read-all port)] [last (void)])
+    (if (null? fs) last (loop (cdr fs) (peval (car fs) env)))))
 
 (define (eval-string s env)
   (eval-all (open-input-string s) env))
@@ -26,8 +35,9 @@
 (define (eval-file path env)
   (call-with-input-file path (lambda (p) (eval-all p env))))
 
-;; 建一个加载好 prelude 的全局环境
+;; 建一个加载好标准库的全局环境
 (define (make-interpreter)
   (define g (make-global-env))
-  (eval-file prelude-path g)
+  (for ([f (in-list lib-files)])
+    (eval-file (build-path lib-dir f) g))
   g)

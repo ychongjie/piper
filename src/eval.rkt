@@ -12,6 +12,7 @@
 (provide (struct-out closure)
          (struct-out primitive)
          (struct-out continuation)
+         (struct-out macro)
          peval papply
          truthy?)
 
@@ -21,6 +22,9 @@
 (struct primitive (name proc) #:transparent)
 ;; 一等 continuation:包住宿主 Racket 续延;作为可应用对象(见 papply)
 (struct continuation (k) #:transparent)
+;; 宏:transformer 是一个把"未求值的实参形式"映射为"新形式"的 Piper 闭包。
+;; 宏是「小核心、库生长」的引擎:amb/loop 等都靠它在语言内部长出来(§5.3)。
+(struct macro (transformer) #:transparent)
 
 (define (self-eval? x)
   (or (number? x) (string? x) (boolean? x) (char? x)))
@@ -39,6 +43,7 @@
        [(quote)  (cadr exp)]
        [(if)     (eval-if exp env)]
        [(define) (eval-define exp env)]
+       [(define-macro) (eval-define-macro exp env)]
        [(set!)   (eval-set! exp env)]
        [(lambda) (closure (cadr exp) (cddr exp) env)]
        [(begin)  (eval-seq (cdr exp) env)]
@@ -73,6 +78,14 @@
 (define (eval-set! exp env)
   (env-set! env (cadr exp) (peval (caddr exp) env))
   (void))
+
+;; (define-macro (name . params) body...) —— 注册一个宏。
+;; transformer 收到未求值的实参形式,返回展开后的新形式(见 eval-app)。
+(define (eval-define-macro exp env)
+  (define spec (cadr exp))            ; (name . params)
+  (define name (car spec))
+  (env-define! env name (macro (closure (cdr spec) (cddr exp) env)))
+  name)
 
 ;; 顺序求值,返回最后一个值
 (define (eval-seq exps env)
@@ -121,10 +134,13 @@
 
 ;; ---- 函数应用 ----------------------------------------------------------
 
+;; 应用位置:先求值算子。若它是宏,则把未求值的实参形式交给 transformer,
+;; 展开成新形式后再求值;否则按普通函数应用(求值实参 → papply)。
 (define (eval-app exp env)
-  (define proc (peval (car exp) env))
-  (define args (map (lambda (a) (peval a env)) (cdr exp)))
-  (papply proc args))
+  (define op (peval (car exp) env))
+  (if (macro? op)
+      (peval (papply (macro-transformer op) (cdr exp)) env)
+      (papply op (map (lambda (a) (peval a env)) (cdr exp)))))
 
 (define (papply proc args)
   (cond

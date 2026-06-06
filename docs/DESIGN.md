@@ -290,11 +290,16 @@ SICP amb 求值器的语义,候选可由 LLM 生成:
 
 ```scheme
 ;; LLM 驱动的 amb:候选本身来自模型
-(define plan (amb* (llm-code "给出 3 个修复测试的不同策略,返回一个 list")))
+(define plan (amb* (eval (llm-code "给出 3 个修复策略,返回一个 list"))))
 (require (plan-passes? plan))
 ```
 
-实现:维护一个失败 continuation 栈;`(require #f)` 调用栈顶失败续延回到最近的 `amb`。
+**实现(已落地,`lib/amb.piper`,纯库代码)**:维护一个失败续延栈 `*amb-fail*`;`amb-thunks` 用 `call/cc` 捕获成功/重试续延,试第一个候选并经 `succeed` 逃逸,回溯时弹栈顶续延推进到下一个候选;`(require #f)` 即调 `amb-fail`。`(amb e ...)` 由 `define-macro` 展开为 `(amb-thunks (list (lambda () e) ...))`——候选惰性化是回溯的前提。`amb*` 在运行时列表间选择(候选可为 LLM 产出)。**唯一控制特殊形式仍只有 `call/cc`**,amb 因此可被 `redefine!`。
+
+#### 两个相关实现要点
+
+- **`define-macro`(M3 新增的核心设施)**:`eval` 在应用位置先求值算子,若得到宏对象,则把**未求值的实参形式**交给 transformer 展开再求值(`src/eval.rkt`)。宏是「小核心、库生长」的引擎——`amb` 用它,`loop`(M5)也将用它。它是元语言设施,不是控制协议,故进核心是正当的。
+- **read-all 语义**:`eval-file`/`eval-string` 先把**所有**顶层 form 读进列表再逐个求值。这样 `amb` 回溯跳回前面的 form 时,续延持有的是不可变列表尾、约束会被重新检查;若从可变 port 逐个读则会"读过头"导致约束漏检。因此**一段含回溯的程序应作为一个文件/字符串整体求值**(REPL 逐行模式不支持跨行回溯)。
 
 ### 8.3 `goal`(追求目标直到达成)
 
@@ -386,7 +391,7 @@ GOAL(desc, success?, tools, max-steps):
 | **M0 求值器** ✅ | reader(复用 Racket)+ env + eval/apply + 基本特殊形式 | 能跑 `(define (fact n) ...)` 等纯 Scheme |
 | **M1 continuation** ✅ | `call/cc` 委托宿主 + `capture`/`restore` | 能用 call/cc 实现 generator;能快照/回滚全局 env |
 | **M2 LLM 原语** ✅ | `llm` 子进程 + `ask` + `llm-code` + `eval` + `gen` | `(gen "算 6*7")` → 42;`llm-code` 定义过程后可直接调用 |
-| **M3 amb** | `amb`/`require` 回溯 + LLM 驱动的 `amb*` | SICP 经典 amb 谜题通过;LLM 候选回溯通过 |
+| **M3 amb** ✅ | `define-macro` 宏设施 + `amb`/`require` 回溯(纯库代码)+ `amb*` | 勾股数/约束求解通过;`amb*` 在运行时列表(可为 LLM 候选)间回溯 |
 | **M4 goal** | `goal-driver`(过程)+ step 循环 + 回溯 + 工具白名单 | 一个玩具 goal(如"让某测试通过")端到端达成 |
 | **M5 loop** | `loop` 宏:`#:every` / `#:until` / `#:self-paced` | 周期任务与自定步任务各跑通一个 demo |
 | **M6 自修改** | `redefine!` + 事务 + 审计 + 安全模型 | agent 自我改写一个过程并在冒烟失败时回滚 |
