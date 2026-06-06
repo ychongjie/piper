@@ -31,11 +31,11 @@ make repl                          # 进 REPL
 make run FILE=examples/panel.piper # 跑一个程序
 ```
 
-执行层(`agent`/pi)可选,需一次性配 provider(指到现有开源端点、密钥在仓库外):见 [DESIGN §13](docs/DESIGN.md)。
+执行层(`agent`/pi)可选,需一次性配 provider(指到现有开源端点、密钥在仓库外):见 [DESIGN 附录 A](docs/DESIGN.md)。
 
 ## 状态
 
 M0–M6 已实现(求值器 + 一等 continuation + LLM 接入 + 宏/amb 回溯 + goal/loop + 运行时自修改),
-正按编排语言方向收敛(两层 worker、精简原语、`#lang` 可读性、自改进编排)。路线图见 [DESIGN §11](docs/DESIGN.md)。
+正按编排语言方向收敛(两层 worker、精简原语、`#lang` 可读性、自改进编排)。路线图见 [DESIGN §7](docs/DESIGN.md)。
 
 技术栈:**Racket + 原生 `call/cc` + [`llm`](https://github.com/simonw/llm)(认知)+ [`pi`](https://github.com/earendil-works/pi)(执行)**。
