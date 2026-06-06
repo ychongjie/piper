@@ -1,28 +1,61 @@
 # Piper 设计文档
 
-> 一门 AI 原生的 Lisp 方言。它把 SICP 的三件武器——**同像性、元循环求值器、一等 continuation**——
-> 直接对应到 AI agent 的三个核心诉求:**可自我重写的计划、可被 LLM 编织的求值循环、可暂停/回溯的执行状态**。
-> 语言原生支持 `goal`(追求目标直到达成)与 `loop`(周期/自定步重入),并支持**运行时自修改**。
+> 一门 **AI 原生的 agent 编排语言**(Racket 实现)。用一组高层"agency 动词"
+> (`goal`/`loop`/`best`/`fan`/`try`/`ask`/`do`)编排 LLM 与 agent harness。
+> 引擎室是 SICP 三件武器——**同像性、元循环求值器、一等 continuation**——但作者只写高层意图。
 
-状态:M0–M6 已实现 + 自进化 / 自我生长 / 编排层已落地。
+状态:M0–M6 已实现(求值器 / continuation / LLM / 宏 / amb / goal / loop / 自修改),
+正按"**编排语言**"方向收敛:两层 worker、精简原语、可读性 `#lang`、自改进编排。
 
-## 定位(方向性结论)
+---
 
-Piper 是 AI agent / harness 的**编排语言**,不是又一个 harness。
+## 目标与定位(北极星)
 
-- **harness**(如 Claude Code):把"模型+工具"变成**一个**会干活的 agent,agent loop 是**写死**的。
-- **编排器**(Piper):把**多个 agent run** 当可组合的值,组成结果——fan-out、投票、回溯、调度、自适应。
-- 分工:**模型(或 shell 出去的真 harness)当聪明 worker,语言当控制平面。**
-- 独特之处:**编排逻辑本身**是 `call/cc` 写的、可回溯(`amb`)、可事务(`capture/restore`)、可在运行时 `redefine!` 自我进化的程序——固定的 harness 循环 / 固定的 workflow API 给不了。
+### 是什么 / 不是什么
 
-这也解决了"模型一次就做完、语言没出力"的问题:在编排器里两者不抢戏,语言贡献的是搜索/回溯/调度/自适应逻辑,看得见、必须出力。`goal`/`loop` 只是两种内建编排模式,非终点。
+Piper 是 agent / harness 的**编排语言**,**不是**又一个 harness。
 
-**两层 worker(不同层级,不同职能):**
-- **认知层(llm)** = 编排器的"脑子":纯、无副作用、只看 prompt。构造器 `(model 名字)`;动词 `ask`/`judge`/`propose`。`lib/cognition.piper`。
-- **执行层(pi)** = 被派出的自主 agent:重、有工具+循环+副作用。构造器 `(agent 目录)`。`lib/agents.piper`。
-- **边界规则**:认知层【不碰环境】。要参考本地代码就由控制平面 `(read-files paths)` 读出来拼进 prompt;"该看哪些代码"本身需要探索时改用 `(agent …)`。即 llm/pi 的边界 = **碰不碰环境**。
+- **harness**(如 Claude Code):把"模型+工具"变成**一个**会干活的 agent;`/goal`、`/loop`、agent teams 是**固定功能**——能调用,但不能当程序任意嵌套/组合,层间协调靠模型临场发挥。
+- **编排器**(Piper):`goal`/`loop`/`best`/`fan`… 是**语言里的表达式**,返回值、可作为任意其它原语的参数。**灵活的嵌套/组合是核心差异**(已机械验证 `loop ⊃ fan ⊃ best ⊃ agent ⊃ goal` 任意套)。
+- 分工:**模型 / 真 harness 当 worker,语言当控制平面。** 这也解决了"模型一次做完、语言没出力":控制平面贡献搜索 / 回溯 / 择优 / 调度 / 自适应,看得见、必须出力。
 
-**精简词汇(~12,正交)**:worker = `(lambda (task) -> 结果)`,仅 `model`/`agent` 两个构造器;控制平面 `fan-out`/`best`/`vote`/`amb`+`require`/`loop`/`goal` 对 worker 类型一视同仁;认知动词 `ask`/`judge`/`propose` 与组合子咬合(`judge`→`best` 的 score、`propose`→`amb*` 的候选)。详见 README「编排核心词汇」。`lib/orchestrate.piper`。
+### 工作层级:agency 动词,不是 go/chan
+
+原语在"**agent 在干什么**"这一层,而非线程 / 通道。续延、并发、eval、快照全部降为**引擎室(substrate)**,不进用户词汇——作者永远不碰 `call/cc`。哲学是**少而胖**:每个原语本身高层、可配置(与 Go 的"少而薄"相反)。
+
+### 原语集(agency 的动词,其余皆库)
+
+| 原语 | 含义(agent 在干什么) | 层 |
+|---|---|---|
+| **`goal`** | 追求一个目标直到达成(agent 自主决定步骤) | 控制 |
+| **`loop`** | 重复:**收敛式**(直到达标)/ **反应式**(常驻,有事就做) | 控制 |
+| **`best`** | 在多个不确定尝试中择优(judge / 投票 / 跑测试 / 回溯搜索 都是"选"的策略) | 控制 |
+| **`fan`** | 同一件事并行交给多个 worker / 并行处理一批输入 | 控制 |
+| **`try`** | 试探性地做,坏了整体回滚(agent 动作不可靠) | 控制 |
+| **`ask` / `do`** | 调用智能:模型**想**(`model`,认知层)/ harness **干**(`agent`,执行层) | 叶子 |
+| **`settle`**(待定) | 把被验证为确定的步骤沉淀进骨架(见「自改进编排」) | 控制? |
+
+`vote` / `race` / `timeout` / `evolve!` / `debate` / `pipeline` 等皆为上面几样的**库组合**——就像 Go 用 `go`+`chan` 搭出一切。
+
+### 两层 worker + 边界规则(llm 想 / pi 干)
+
+- **认知层(`llm`)** = 编排器的"脑子":纯、无副作用、只看 prompt。`model`/`ask`/`judge`/`propose`。`lib/cognition.piper`。
+- **执行层(`pi`)** = 被派出的自主 agent:重、有工具+循环+副作用。`agent`。`lib/agents.piper`。
+- **边界 = 碰不碰环境**:认知层要参考本地代码,就由控制平面 `(read-files …)` 读出来拼进 prompt;"该看哪些代码"本身需要探索,则改用 `(agent …)`。
+
+### 自改进编排:frontier → scaffold(保留同像性/自修改的根本理由)
+
+编排有两轨:**scaffold**(确定的固定代码)与 **frontier**(LLM 驱动)。agent 把执行中**被验证为确定**的步骤(如 `loop review` 里"查 MR 内容")从 frontier **沉淀进 scaffold**——该步不再走 LLM。效果:**用得越久,编排越便宜 / 快 / 可靠**,LLM 只留在真正新颖处。机制:历史即数据(同像性)→ 检测确定性 → `redefine!` 改写编排 → `capture/restore` + 验证。难点:确定性判定(需证据阈值 + 验证 + 可回退)、改写活控制流的安全(事务 + 逃生舱)。
+
+### 可读性:先定语义,后定皮
+
+表层用 Racket **`#lang` 自定义 reader** 做友好语法,**展开回核心 s-expr**;同像性保留(表层 → 规范 s-expr,自改写在 s-expr 上做)。渐进两档:**轻档**=具名参数 + `fmt` + `{}` 插值(已做一半);**重档**=缩进 / 无括号 DSL(原语集与语义定稿后再写 reader)。理想形态见 §12。
+
+### 选型复核(2025 重估,结论:维持 Racket + 手写求值器)
+
+- **一等 continuation** 是这套东西的灵魂(回溯 / 挂起恢复 / 检查点),主流语言里别扭、Scheme 里天生 → **维持 Racket**。
+- **宏**用来长出"胖高层原语"(`goal`/`loop`) → 维持。
+- **同像性**因"自改进编排(frontier→scaffold)"重新成为刚需 → 维持,且**保留手写元循环求值器**(沙箱 eval LLM 代码 + 可改写 + 将来可序列化续延)。
 
 ---
 
@@ -428,37 +461,67 @@ goal-run(desc, success?, tools, max-steps):
 
 ---
 
-## 11. 开放问题(待后续定)
+## 11. 路线图与缺口(按编排语言方向)
 
-1. **Prompt 工程**:`render` 如何把 trace/工具签名压缩进上下文?长历史怎么摘要?
-2. **s-expr 校验**:LLM 产出非法/越权代码时的解析与拒绝策略(沙箱 eval + 静态白名单检查)。
-3. **`amb` 与 continuation 的交互**:回溯栈在挂起/恢复下的语义边界。
-4. **可序列化时机**:何时值得把求值器去函数化?触发条件(需要跨进程挂起)是什么?
-5. **`loop #:self-paced` 调度**:进程内定时器 vs. 外部调度器(cron/wakeup)的对接面。
-6. **多 agent**:goal 内部能否 spawn 子 goal?continuation 能否在 agent 间传递?
+组合 / 嵌套的**语义已成立**(已验证);要让它在执行层**又快又稳**,缺三块引擎室能力(都在 substrate,不动高层词汇):
+
+1. **并发(优先级最高)**:`fan`/`best` 现在顺序跑 → 嵌套时延迟叠加。用 Racket `thread`/`channel`/`sync` 做成真并发,顺带白送 `race`/`timeout` 与 agent 间通信。
+2. **工作区事务**:`capture/restore` 只滚 Piper 自身状态、滚不了 agent 改的文件。补 `snapshot-dir`/`restore-dir`(底层 git/cp),让 `try` 能回滚**有副作用**的执行层组合。
+3. **逐项错误隔离**:`fan`/`loop` 里单个 worker 抛错会掀翻整组(实测过);需在其内建 per-item `try`。
+
+语义与表层:
+
+4. **原语集定稿**:把 ~7 个 agency 动词(尤其 `loop` 收敛/反应两态、`best` 多种选法、`fan`、`settle`)写成规格 + 测试。
+5. **可读性 `#lang`**:先轻档(具名参数 + `{}` 插值);语义定稿后写重档(缩进 / 无括号 reader),展开回核心 s-expr。
+6. **自改进编排(`settle`/crystallize)**:确定性判定策略(证据阈值 + 沉淀后验证 + 可回退)、改写活控制流的安全;`settle` 是否升为第 7 原语。
+
+更远:
+
+7. **可序列化 continuation**:去函数化成显式栈 → 跨进程挂起/恢复(常驻 agent 抗重启、等人审批跨会话)。
+8. **多 worker 协作**:debate / 黑板 / 市场等模式(建在并发 + channel 之上)。
+
+其它工程项:Prompt 工程(trace/工具签名压缩、长历史摘要)、LLM 产出 s-expr 的校验与拒绝、常驻 `loop` 的 seen 去重 + 外部调度对接。
 
 ---
 
-## 12. 示例:一个会自我改进的评审循环(目标形态)
+## 12. 理想形态:常驻评审编排(嵌套 + 自改进)
 
-```scheme
-;; 周期评审最新 PR;若连续失误,自己改写评审过程
-(loop #:every 10min
-  (when (new-pr?)
-    (define ckpt (capture))
-    (define verdict
-      (goal "评审最新 PR 并给出可执行结论"
-        #:success? (lambda () (verdict-ready?))
-        #:tools    (list read-diff run-tests post-comment)
-        #:max-steps 15))
-    (record! verdict)
-    ;; 自改进:最近三次评审若被人工推翻,改写评审策略
-    (when (>= (recent-overrides 3) 2)
-      (redefine! 'review-strategy
-        (llm-code "依据最近被推翻的评审,改进策略,返回新 lambda"
-                  (procedure-source review-strategy)
-                  (recent-overrides 3)))
-      (unless (smoke-test-ok?) (restore ckpt)))))
+同一段编排,两种写法——上面是**重档 `#lang` 表层**(目标形态,reader 待写),下面是它**展开成的核心 s-expr**(今天可写,`fan`/`settle` 待实现)。
+
+### 重档 `#lang piper`(目标形态)
+
+```
+#lang piper
+
+loop every 1h:
+    fan mr in open-mrs():                          # 每个 MR 并行
+        review = best 3 by "最严重、最有依据":        # 3 个 agent 竞争 + 认知裁判
+            agent in repo(mr): "review MR {mr},找出问题"
+        when risky(review):
+            goal "深查 MR {mr} 的风险":              # 嵌套:升级成自主 goal
+                tools:     run-tests, read-file
+                until:     verdict-ready()
+                max-steps: 15
+        post(mr, review)
+
+    settle steps stable-for 5                       # 沉淀:连续 5 轮确定的步骤焊进骨架
 ```
 
-这段程序集齐了四样东西:**loop 重入、goal 求解、LLM 生成代码、事务性自修改**——也就是 Piper 想要证明的东西。
+### 展开成的核心 s-expr(今天的写法)
+
+```scheme
+(loop (every 3600)
+  (fan open-mrs (lambda (mr)
+    (define review
+      (best (map (lambda (_) (agent (repo mr))) (range 3))
+            (fmt "review MR {} 找出问题" mr)
+            "最严重、最有依据"))
+    (when (risky? review)
+      (goal (fmt "深查 MR {} 的风险" mr)
+        (success?  verdict-ready?)
+        (tools     (list (cons 'run-tests rt) (cons 'read rd)))
+        (max-steps 15)))
+    (post mr review)))))
+```
+
+这段集齐了 Piper 想证明的一切:**嵌套组合**(`loop ⊃ fan ⊃ best ⊃ agent ⊃ goal`)、**两层 worker**(`agent` 干 / 认知裁判选)、**真实反馈 + 择优**、以及(`settle`)**frontier→scaffold 自改进**。固定功能的 harness 表达不出这种"可当程序的编排"。

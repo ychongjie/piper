@@ -6,9 +6,14 @@
 
 **定位**:不是又一个 harness(像 Claude Code 那样的单 agent 系统),而是 harness 的
 **编排器**。模型(或 shell 出去的真 harness)当聪明 **worker**,Piper 当**控制平面**——
-分工清晰:模型负责聪明,语言负责控制。它的独特之处是**编排逻辑本身**是用 `call/cc`
-写的、可回溯、可事务、可在运行时 `redefine!` 自我进化的程序——这是固定的 harness 循环
-或固定的 workflow API 给不了的。
+分工清晰:模型负责聪明,语言负责控制。
+
+**北极星**(详见 [docs/DESIGN.md](docs/DESIGN.md)「目标与定位」):
+
+- **原语在 agency 层**,不是 go/chan 层——`goal`/`loop`/`best`/`fan`/`try`/`ask`/`do` 是"agent 在干什么"的高层动词;续延/并发/eval/快照是不露脸的引擎室。**少而胖**。
+- **灵活的嵌套/组合是核心差异**:这些原语是表达式,可任意互套(`loop ⊃ fan ⊃ best ⊃ agent ⊃ goal`)——固定功能的 harness 表达不出"可当程序的编排"。
+- **自改进编排(frontier→scaffold)**:agent 把执行中被验证为确定的步骤沉淀进编排骨架,该步不再走 LLM——用得越久越便宜/快/可靠。这是保留同像性+自修改的根本理由。
+- **可读性走 `#lang`**:友好表层(渐进到缩进/无括号)展开回核心 s-expr,同像性保留。先定语义,后定皮。
 
 ### 编排核心词汇(~12,正交)
 
