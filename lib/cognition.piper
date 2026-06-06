@@ -1,14 +1,18 @@
-;; 认知层(llm)= 编排器自己的"脑子"。
-;; 纯、便宜、返回值、无副作用。它【不是被派去干活的 worker】,而是控制平面用来
-;; 【思考】的能力——决策 / 打分 / 提议 / 批判 / 合议。融进 best-of 的裁判、amb 的
-;; 提议者、loop 的调度判断里。与执行层(pi,见 lib/agents.piper)是两个不同层级。
+;; 认知层(llm)= 编排器的"脑子":纯、便宜、返回值、无副作用。
+;; 它只看你喂进 prompt 的东西——这是它和执行层(pi)的边界。
+;;
+;; 边界规则(重要):
+;;   认知层【不碰环境】。需要参考本地代码时,由控制平面 (read-files …) 把代码读出来
+;;   拼进 prompt;若"该看哪些代码"本身需要探索(grep/跟引用),那不是认知,
+;;   而是派执行层 (agent …) 去做。
+;;
+;; 认知 worker:绑定到某模型的一次补全。worker = (lambda (task) -> 文本)。
+;; (ask 在 prelude:用默认模型;judge/propose 是 ask/llm-code 之上的常用包装,
+;;  本身可当 best 的 score、amb* 的候选,与控制平面咬合。)
 
-;; 指定模型的一次思考(开源模型在 ~/.../io.datasette.llm 里配)
-(define (ask-model model task) (llm task "" model))
+(define (model name) (lambda (task) (llm task "" name)))
 
-;; ---- 思考动词:供控制平面决策/择优/搜索 ----
-
-;; 给候选按某标准打 0-10 分(best-of 的裁判;解析失败记 0)
+;; 给内容按某标准打 0-10 分(给 best 当 score);解析失败记 0
 (define (judge criterion x)
   (let ((n (string->number (string-trim
              (ask (string-append
@@ -16,27 +20,8 @@
                    (->string x)))))))
     (if n n 0)))
 
-;; 在若干选项里选一个(返回选中项的文字)
-(define (decide question options)
-  (string-trim (ask (string-append question
-                     "\n候选:" (repr options) "\n只输出其中一个,原样,不要解释。"))))
-
-;; 就一个任务生成 n 个互不相同的候选(amb/fanout 的提议者,返回一个 list)
+;; 就一个任务生成 n 个互不相同的候选(给 amb* 当搜索空间),返回一个 list
 (define (propose n task)
-  (eval (llm-code (string-append "针对任务【" task "】给出 " (number->string n)
-                  " 个互不相同的候选,返回一个 Scheme list,每个元素是字符串。"))))
-
-;; 找问题(没有就回 OK)
-(define (critique x)
-  (ask (string-append "指出下面内容的问题;若没有问题只回 OK:\n" (->string x))))
-
-;; ---- 多模型合议(认知层的"评审团":仍是思考,只是多个脑子)----
-
-(define (ensemble models task) (map (lambda (m) (ask-model m task)) models))
-
-(define (vote-ensemble models task)
-  (vote (map (lambda (m) (lambda () (ask-model m task))) models)))
-
-(define (best-ensemble models task criterion)
-  (best-of (map (lambda (m) (lambda () (ask-model m task))) models)
-           (lambda (ans) (judge criterion ans))))
+  (eval (llm-code (string-append
+                   "针对任务【" task "】给出 " (number->string n)
+                   " 个互不相同的候选,返回一个 Scheme list,每个元素是字符串。"))))

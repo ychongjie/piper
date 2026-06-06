@@ -10,26 +10,36 @@
 写的、可回溯、可事务、可在运行时 `redefine!` 自我进化的程序——这是固定的 harness 循环
 或固定的 workflow API 给不了的。
 
-把"一次 agent run"当可组合的值,语言提供控制平面:
+### 编排核心词汇(~12,正交)
 
-- **编排组合子** `fanout` / `best-of`(LLM 裁判)/ `vote` / `first-ok` / `retry` / `pipeline`(`lib/orchestrate.piper`)
-- **回溯搜索** `amb` / `require` —— 在 worker 候选间搜索、剪枝(`lib/amb.piper`)
-- **事务** `capture` / `restore` —— 给整段编排打检查点、失败整体回滚
-- **自适应** `redefine!` / `improve!` / `evolve!` —— 编排策略自我进化(`lib/self-modify.piper`)
-### 两层:认知层(llm)与执行层(pi)——不同层级,不同职能
+统一约定:**worker = `(lambda (task) -> 结果)`,只有 `model` / `agent` 两个构造器,控制平面对 worker 类型一视同仁。**
 
-`llm` 和 `pi` **不是同一层的 worker**,它们定位不同:
+| 组 | 名字 | 签名 / 作用 |
+|---|---|---|
+| **worker 构造** | `model` | `(model 名字)` → 认知 worker(一次 LLM 补全,结果是文本) |
+| | `agent` | `(agent 目录)` → 执行 worker(派 pi 子 agent,结果 `(退出码 . 输出)`) |
+| **控制平面** | `fan-out` | `(fan-out workers task)` → 全部结果 |
+| | `best` | `(best workers task score)` → 按分最优 |
+| | `vote` | `(vote workers task)` → 多数表决 |
+| | `amb`/`require` | 回溯搜索(`amb*` 对一个列表);`require` 不成立则回溯 |
+| | `loop` | 迭代/重入:`(until p)`/`(times n)`/`(every s)`/`(self-paced)` |
+| | `goal` | 单 worker 自主追目标 |
+| **认知动词** | `ask` | `(ask task)` → 文本(默认模型) |
+| | `judge` | `(judge 标准 内容)` → 0~10(给 `best` 当 score) |
+| | `propose` | `(propose n task)` → 候选列表(给 `amb*` 当搜索空间) |
 
-| 层 | 后端 | 是什么 | 性质 | 用来 | 文件 |
-|---|---|---|---|---|---|
-| **认知层** | `llm` | 编排器自己的"脑子" | 纯、便宜、返回值、无副作用 | **想**:决策 / 打分 / 提议 / 批判 / 合议 | `lib/cognition.piper` |
-| **执行层** | `pi` | 被派出去的自主 agent | 重、有工具+循环+副作用 | **干**:在真实环境里完成任务 | `lib/agents.piper` |
+`fan-out`/`best`/`vote` 一套打通"多模型合议"和"多 agent 竞争";`judge`→`best` 的 score、`propose`→`amb*` 的候选,认知动词与组合子咬合。
 
-**范式:认知层编排执行层。** 用 `llm` 想(派谁、怎么判、何时回溯),用 `pi` 干。
+### 两层边界规则(llm 想 / pi 干)
 
-- 认知层(`lib/cognition.piper`):`ask-model` / `judge`(0-10 裁判)/ `decide` / `propose` / `critique`,以及多模型合议 `ensemble` / `vote-ensemble` / `best-ensemble`。融进 `best-of`/`amb`/`loop` 的控制流里。开源模型经 `llm` 插件接(Ollama/本地/托管),fan-out 一组开源模型当评审团是白送的(`examples/panel.piper`)。
-- 执行层(`lib/agents.piper`):`agent`(在沙箱目录派一个 pi 子 agent,返回 `(退出码 . 输出)`)+ 桥接 `best-agent`(派 N 个、认知层裁判择优)/ `dispatch-all` / `verify`(认知层校验执行结果)。`pi --provider/--model` 任意开源模型,工具白名单交给 pi。
-- `claude`/`codex` 也能包成执行层 agent,但锁厂商/计费,默认不用。
+| 层 | 后端 | 性质 | 判定标准 |
+|---|---|---|---|
+| **认知层** | `llm`(`model`/`ask`/`judge`/`propose`) | 纯、无副作用、只看 prompt | **不碰环境** |
+| **执行层** | `pi`(`agent`) | 重、有工具+循环+副作用 | **在真实环境里干活** |
+
+> **认知层只看你喂给它的东西。** 需要参考本地代码时,由控制平面 `(read-files paths)` 读出来拼进 prompt(认知层仍是纯函数,可缓存/可 mock);若"该看哪些代码"本身需要探索(grep/跟引用),那不是认知,而是派 `(agent dir)` 去做。这条 = llm/pi 的层边界:**碰不碰环境**。
+
+事务(`capture`/`restore`)、自适应(`redefine!`/`improve!`/`evolve!`)、真实反馈(`shell`/`read-files`)是与编排一起用的相邻能力。`claude`/`codex` 也能包成执行层 agent,但锁厂商/计费,默认不用。
 
 ### 执行层(pi)配置
 

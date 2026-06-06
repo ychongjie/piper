@@ -15,7 +15,14 @@ Piper 是 AI agent / harness 的**编排语言**,不是又一个 harness。
 - 分工:**模型(或 shell 出去的真 harness)当聪明 worker,语言当控制平面。**
 - 独特之处:**编排逻辑本身**是 `call/cc` 写的、可回溯(`amb`)、可事务(`capture/restore`)、可在运行时 `redefine!` 自我进化的程序——固定的 harness 循环 / 固定的 workflow API 给不了。
 
-这也解决了"模型一次就做完、语言没出力"的问题:在编排器里两者不抢戏,语言贡献的是搜索/回溯/调度/自适应逻辑,看得见、必须出力。`goal`/`loop` 只是两种内建编排模式,非终点。worker 接口:`ask`/`gen`/`llm-code`(LLM)、`shell`(真 harness/工具)、子 `goal`。编排组合子见 `lib/orchestrate.piper`。
+这也解决了"模型一次就做完、语言没出力"的问题:在编排器里两者不抢戏,语言贡献的是搜索/回溯/调度/自适应逻辑,看得见、必须出力。`goal`/`loop` 只是两种内建编排模式,非终点。
+
+**两层 worker(不同层级,不同职能):**
+- **认知层(llm)** = 编排器的"脑子":纯、无副作用、只看 prompt。构造器 `(model 名字)`;动词 `ask`/`judge`/`propose`。`lib/cognition.piper`。
+- **执行层(pi)** = 被派出的自主 agent:重、有工具+循环+副作用。构造器 `(agent 目录)`。`lib/agents.piper`。
+- **边界规则**:认知层【不碰环境】。要参考本地代码就由控制平面 `(read-files paths)` 读出来拼进 prompt;"该看哪些代码"本身需要探索时改用 `(agent …)`。即 llm/pi 的边界 = **碰不碰环境**。
+
+**精简词汇(~12,正交)**:worker = `(lambda (task) -> 结果)`,仅 `model`/`agent` 两个构造器;控制平面 `fan-out`/`best`/`vote`/`amb`+`require`/`loop`/`goal` 对 worker 类型一视同仁;认知动词 `ask`/`judge`/`propose` 与组合子咬合(`judge`→`best` 的 score、`propose`→`amb*` 的候选)。详见 README「编排核心词汇」。`lib/orchestrate.piper`。
 
 ---
 
