@@ -7,6 +7,10 @@ agent harness——**模型当 worker,语言当控制平面**。
 是语言里的**表达式**,可任意嵌套组合(`loop ⊃ fan ⊃ best ⊃ agent ⊃ goal`)——固定功能的
 harness 表达不出"可当程序的编排"。引擎室是同像性 + 元循环求值器 + 一等 `call/cc`,但作者只写高层意图。
 
+**价值四支柱**(详见 [DESIGN §1.4](docs/DESIGN.md)):把不可靠/昂贵/有副作用的 agent 变成可编排的积木——
+① 程序化编排(地基)· ② 可靠化(组合换可靠)· ③ 安全化(可逆+沙箱+人审)· ④ 自改进(越用越好)。
+目标场景含**本机并发调度 ≤100 个 agent run**(跨机海量则当策略层套外部 runtime)。
+
 📖 [docs/DESIGN.md](docs/DESIGN.md) 目标与设计 · 📋 [docs/CHEATSHEET.md](docs/CHEATSHEET.md) 一页速查 · 🧩 [examples/](examples/) 可跑示例
 
 ## 核心词汇(~12,正交)

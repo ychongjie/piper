@@ -33,6 +33,21 @@ Piper 是 agent / harness 的**编排语言**,**不是**又一个 harness。
 | **一等 continuation** | **编排**的可暂停 / 可回溯控制状态:`amb` 回溯、`loop` 重入、`capture/restore` 事务、(未来)挂起等审批 |
 | **同像性(code = data)** | **编排**可自我改写的载体:LLM 吐可组合代码、`redefine!`、以及"自改进编排"(§3) |
 
+### 1.4 价值轴(四根支柱)
+
+一句话:**把不可靠 / 昂贵 / 有副作用的 AI agent,变成可编排的积木**,在四个轴上增值。
+
+| 支柱 | 是什么 | 靠什么 | 状态 |
+|---|---|---|---|
+| **① 程序化编排(地基)** | 把 coding agent(claude/pi)的编排从"内部命令 / 手动执行"变成**可组合、自动运行的程序** | `agent`/`fan`/`best`/`loop`/`goal` + `shell` 真实反馈 | ✅ 基本实现(`examples/fix-compete.piper`) |
+| **② 可靠化:组合换可靠** | 用**多个不可靠 run 组合出可靠产出**(不是把单个 agent 变强) | `best`/`vote`/`amb`、跨模型/跨 harness 评审团、keep-best、不信自我汇报 | ✅ 有 demo(`panel`) |
+| **③ 安全化:可逆 + 受限 + 可审批** | 让无人值守自动化从"冒险"变"可控"——**最被低估,却决定敢不敢真放手** | 能力沙箱 `eval-in`、事务 `capture/restore`(+文件快照待补)、人审挂起(`call/cc`) | ⚠️ 部分(文件级事务、durable 人审待补) |
+| **④ 自改进:越用越好** | 编排把确定步骤沉淀成代码、积累技能,变便宜 / 快 / 可靠 | crystallize / `settle`(frontier→scaffold,§3)、`learn!`、`evolve!`/`improve!` | ⏳ 最有 insight、最未证明 |
+
+次级(派生但真实):**可审计 / 可复现**(编排即数据、`redefine-log`)、**成本优化**(两层 + 模型分级 + 自改进)。
+
+排序:① 是地基(已做到);**③ 安全化最被低估**、却决定"敢不敢真放手";④ 自改进最独特但别全押。
+
 ---
 
 ## 2. 原语集(agency 的动词,其余皆库)
@@ -179,7 +194,7 @@ Piper 的 `call/cc` 直接委托宿主 Racket `call/cc`(解释递归跑在宿主
 
 组合 / 嵌套的**语义已成立**;要在执行层**又快又稳**,缺三块引擎室能力(都在 substrate,不动高层词汇):
 
-1. **并发(优先级最高)**:`fan`/`best` 现为顺序 → 嵌套时延迟叠加。用 Racket `thread`/`channel`/`sync` 做真并发,顺带白送 `race`/`timeout` 与 agent 间通信。
+1. **并发与本机调度(优先级最高)**:**目标 = 本机并发调度 ≤100 个 agent run**(不做跨机海量——那时 Piper 当策略层、套在外部分布式 runtime 上,见下)。`fan`/`best` 现为顺序 → 嵌套时延迟叠加。agent run 是 **I/O 密集**,Racket **绿色线程**很适配:`thread`/`channel`/`sync` + 并发上限信号量 + token/$ 预算 + per-item 隔离重试 + 超时;顺带白送 `race`/`timeout` 与 agent 间通信。**这块是"大规模"(本机 ≤100)的总开关。**
 2. **工作区事务**:`capture/restore` 只滚 Piper 状态、滚不了 agent 改的文件。补 `snapshot-dir`/`restore-dir`(git/cp),让 `try` 回滚有副作用的执行层组合。
 3. **逐项错误隔离**:`fan`/`loop` 里单个 worker 抛错会掀翻整组;在其内建 per-item `try`。
 
