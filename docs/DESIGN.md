@@ -27,7 +27,7 @@
 
 | Scheme 特性 | Agent 诉求 | 在 Piper 里的兑现点 |
 |---|---|---|
-| **同像性(code = data)** | 计划要能被读取、推理、改写 | LLM 吐出的字符串 `read` 成 s-expr,既能 `eval` 又能被 agent 当数据反思/重写;`goal`/`loop`/`tool` 都是宏。 |
+| **同像性(code = data)** | 计划要能被读取、推理、改写 | LLM 吐出的字符串 `read` 成 s-expr,既能 `eval` 又能被 agent 当数据反思/重写;`goal`/`loop`/`tool` 都是可被 `redefine!` 的库代码。 |
 | **元循环求值器** | 求值的每一步都要能插桩、注入 LLM、处理空洞 | 我们拥有 `eval`/`apply`,于是 **eval 循环 = agent 循环**:可记录 trace、遇到高层目标就问 LLM、失败就让 LLM 修复重试。 |
 | **一等 continuation** | 暂停/恢复、回溯、检查点 | `call/cc` 给出:等工具/审批时**挂起**、计划失败就**回溯**(amb)、把执行状态**捕获成检查点**用于事务性自修改。 |
 
@@ -37,7 +37,7 @@
 
 ## 2. 设计原则
 
-1. **小核心,宏生长**:核心求值器只认少数特殊形式;`goal`/`loop`/`tool`/`amb` 等都用宏在语言内部生长出来。
+1. **小核心,库生长**:核心求值器只认极少数特殊形式;`goal`/`loop`/`tool`/`amb` 等都在语言内部用库代码(driver 过程 + 薄宏)生长出来,**不进 eval 的 cond**。判据见第 5.3 节的 litmus test。
 2. **LLM 是一种求值策略,不是外挂**:`ask`/`llm` 是一等原语,可出现在任意表达式位置;`goal` 把"LLM 生成下一步 → eval → 检查"做成内建循环。
 3. **环境是数据**:全局环境是我们自己持有的 frame 结构,因此自修改与快照都不依赖序列化。
 4. **可暂停优先于高性能**:控制流以 continuation 为中心设计,宁可慢也要能挂起/回溯。
@@ -96,7 +96,7 @@ piper/
 │   ├── continuation.rkt     ← call/cc 封装、capture/restore
 │   ├── llm.rkt              ← llm CLI 原语 + prompt 渲染
 │   ├── amb.rkt              ← 非确定性求值/回溯
-│   ├── agent.rkt            ← goal / loop 宏
+│   ├── agent.rkt            ← goal-driver(过程)/ loop(薄宏)+ loop-driver
 │   ├── self-modify.rkt      ← redefine! + 事务快照
 │   └── tools.rkt            ← 工具注册表 + 能力白名单
 ├── lib/                     ← 用 Piper 自身写的标准库(.piper)
@@ -161,6 +161,44 @@ MVP 直接复用 Racket 的 `read`,把 Piper 程序当作 Racket datum 读入。
 (define (restore-global! snap) (set-env-vars! *global* (hash-copy snap)))
 ```
 
+### 5.3 什么必须进 eval?(litmus test)与三层模型
+
+一个核心设计判断:`goal`/`loop`/`amb` **不**做成 `eval` 的 cond 分支(特殊形式),而是做成库代码。判据:
+
+> **litmus test**:一个形式必须进 `eval` 的 cond,**当且仅当**它要改变求值协议本身,且这种改变无法用「已经被反映成一等值的原语」表达出来。
+
+把 continuation 反映成一等公民后(`call/cc` 作为唯一不可约的控制原语),回溯 / 搜索 / 目标循环 / 重入**全都退化成普通过程 + 闭包**,够不到这条线:
+
+| 形式 | 改变求值协议? | 落点 |
+|---|---|---|
+| `call/cc` | 是——唯一不可约的控制原语 | **特殊形式(eval case)** |
+| `amb`/`require` | 经典 SICP 需要;但有了 `call/cc` 即可用「`call/cc` + 失败栈」做成库 | 库(或为 SICP 教学保真而做成 eval case,二选一) |
+| `goal` | 否——它要的(LLM 调用、`capture`、受限 `eval`、trace)全是已反映的值 | **库:driver 过程**(参数全是值,甚至无需宏) |
+| `loop` | 否——只是要"延迟/重复求值 body",这是宏的本职 | **库:driver 过程 + 一层薄宏** |
+
+**对自修改语言这是决定性的**:goal/loop 若烤进宿主层 eval,agent 就永远无法 `redefine!` 它们——而改进"追求目标/循环调度的策略"恰恰是本语言的卖点。写成 Piper 自身的库代码,它们的源即可读可改的 s-expr,同像性直接变现。
+
+**goal 与 loop 的差异**:`goal` 的参数全是值(描述是字符串、`#:success?` 是只构造不调用的 lambda、`#:tools` 是 list、`#:max-steps` 是数),applicative-order 先求值再调用完全正确,故 `goal` 可以**就是个普通过程**;`loop` 的 body 必须被延迟并反复求值,需一层薄宏把 body 包成 thunk(`(loop #:every t body...)` → `(loop-driver t (λ () body...))`),宏/闭包还**自动捕获词法环境**——比 eval case 手动穿 env 更省事。
+
+由此得到**三层模型**:
+
+```
+L1 特权原语(eval case / primitive)——不可约的那一小撮
+    call/cc(特殊形式) ; capture / restore / eval / current-env ; tracer 钩子
+        ↑ 唯一真正"动求值协议"的控制原语只有 call/cc
+
+L2 driver(普通过程,用 Piper 写,可被 redefine!)
+    goal-driver : step 循环 + 每步 capture 回溯 + 工具白名单
+    loop-driver : 重入 / 挂起 / 调度
+    amb/require : call/cc + 失败栈
+
+L3 表面语法(薄宏 / 过程)
+    goal : 可直接是过程
+    loop : 一层薄宏,只负责 body thunk 化 + 关键字糖
+```
+
+效果:core 的 cond 里关于控制流的特权项**只有 `call/cc` 一个**,其余全是 agent 可自行改写的库代码——既最 SICP,又最契合自修改定位。第 8 节的 `goal`/`loop`/`amb` 均按此分层实现。
+
 ---
 
 ## 6. Continuation 模型
@@ -210,6 +248,8 @@ MVP:**Piper 的 `call/cc` 直接委托宿主 Racket 的 `call/cc`**。因为解�
 ---
 
 ## 8. Agent 层语义
+
+> 本节所有形式都按第 5.3 节的**三层模型**实现:`call/cc` 是唯一特权控制原语(L1),`amb`/`goal-driver`/`loop-driver` 是普通过程(L2),`goal`/`loop` 是薄宏或过程(L3)。它们全部可被 `redefine!`。
 
 ### 8.1 `ask` / `llm` / `llm-code`
 
@@ -330,7 +370,7 @@ GOAL(desc, success?, tools, max-steps):
 | **M1 continuation** | `call/cc` 委托宿主 + `capture`/`restore` | 能用 call/cc 实现 generator;能快照/回滚全局 env |
 | **M2 LLM 原语** | `llm` 子进程 + `ask` + `llm-code` + prompt 渲染 | `(eval (llm-code "写个加法") env)` 生成即运行 |
 | **M3 amb** | `amb`/`require` 回溯 + LLM 驱动的 `amb*` | SICP 经典 amb 谜题通过;LLM 候选回溯通过 |
-| **M4 goal** | `goal` 宏 + step 循环 + 回溯 + 工具白名单 | 一个玩具 goal(如"让某测试通过")端到端达成 |
+| **M4 goal** | `goal-driver`(过程)+ step 循环 + 回溯 + 工具白名单 | 一个玩具 goal(如"让某测试通过")端到端达成 |
 | **M5 loop** | `loop` 宏:`#:every` / `#:until` / `#:self-paced` | 周期任务与自定步任务各跑通一个 demo |
 | **M6 自修改** | `redefine!` + 事务 + 审计 + 安全模型 | agent 自我改写一个过程并在冒烟失败时回滚 |
 

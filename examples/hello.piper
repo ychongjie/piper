@@ -1,0 +1,13 @@
+;; M0 端到端示例:racket main.rkt examples/hello.piper
+
+(define (fact n)
+  (if (= n 0) 1 (* n (fact (- n 1)))))
+
+(define (greet name)
+  (string-append "hello, " name))
+
+(display (greet "piper")) (newline)
+(display "5! = ") (display (fact 5)) (newline)
+(display "squares: ") (display (map (lambda (x) (* x x)) (range 6))) (newline)
+(display "evens:   ") (display (filter (lambda (x) (= (modulo x 2) 0)) (range 10))) (newline)
+(display "sum 1..100 = ") (display (foldl + 0 (range 101))) (newline)

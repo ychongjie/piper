@@ -12,4 +12,20 @@
 
 技术栈:**Racket + 原生 `call/cc` + [`llm`](https://github.com/simonw/llm) CLI 作为 LLM 原语**。
 
-状态:设计阶段。详见 [docs/DESIGN.md](docs/DESIGN.md)。
+状态:**M0 完成**(纯 Scheme 子集求值器)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
+
+## 快速上手
+
+需要 [Racket](https://racket-lang.org/)(`brew install --cask racket`)。
+
+```sh
+make test                          # 跑测试
+make repl                          # 进 REPL
+make run FILE=examples/hello.piper # 运行一个 Piper 程序
+```
+
+M0 已支持:`quote / if / define / set! / lambda / begin / let / cond / and / or`、
+递归与闭包、变参(`(lambda args ...)` 与点对 `(a . rest)`),以及用 Piper 自身写的
+prelude(`map / filter / foldl / range / append / reverse ...`,见 `lib/prelude.piper`)。
+
+唯一控制特殊形式 `call/cc` 与 LLM/amb/goal/loop 在后续里程碑(M1+)。

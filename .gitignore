@@ -1,0 +1,4 @@
+/Applications/Racket*/
+compiled/
+*.zo
+.DS_Store
