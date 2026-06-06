@@ -301,37 +301,40 @@ SICP amb 求值器的语义,候选可由 LLM 生成:
 - **`define-macro`(M3 新增的核心设施)**:`eval` 在应用位置先求值算子,若得到宏对象,则把**未求值的实参形式**交给 transformer 展开再求值(`src/eval.rkt`)。宏是「小核心、库生长」的引擎——`amb` 用它,`loop`(M5)也将用它。它是元语言设施,不是控制协议,故进核心是正当的。
 - **read-all 语义**:`eval-file`/`eval-string` 先把**所有**顶层 form 读进列表再逐个求值。这样 `amb` 回溯跳回前面的 form 时,续延持有的是不可变列表尾、约束会被重新检查;若从可变 port 逐个读则会"读过头"导致约束漏检。因此**一段含回溯的程序应作为一个文件/字符串整体求值**(REPL 逐行模式不支持跨行回溯)。
 
-### 8.3 `goal`(追求目标直到达成)
+### 8.3 `goal`(追求目标直到达成)✅ 已实现(`lib/agent.piper`)
 
 > 灵感来自 Claude Code 的 `/goal`:给定目标 + 成功判据,agent 自行迭代直至达成或耗尽预算。
 
+**实现采用 clause 语法**(而非 `#:keyword`——M0 无关键字参数;clause 是更 Lispy 的薄宏糖):
+
 ```scheme
-(goal "把 repo 里所有测试跑绿"
-  #:success?  (lambda () (tests-pass?))
-  #:tools     (list run-tests read-file edit-file)
-  #:max-steps 20
-  #:on-fail   'backtrack)        ; 'backtrack | 'ask-human | 'abort
+(goal "把 total 累加到正好 30"
+  (success?  (lambda () (= total 30)))           ; 0 参谓词
+  (tools     (list (cons 'add add)))             ; ((name . proc) ...) 能力白名单
+  (max-steps 12))
+;; => (success <history>) | (exhausted <history>)
 ```
 
-语义(去糖后的核心循环):
+去糖:`(goal desc clause...)` 宏展开为 `(goal-run desc success? tools max-steps)`。L2 driver 循环:
 
 ```
-GOAL(desc, success?, tools, max-steps):
+goal-run(desc, success?, tools, max-steps):
   history := []
-  repeat up to max-steps:
-    if (success?) -> return success(history)
-    step  := llm-code(render(desc, tools, history))   ; LLM 产出下一条 s-expr
-    ckpt  := capture()                                 ; 每步前捕获 continuation+env 快照
-    result:= eval(step, env)                           ; 执行(可能是工具调用 / 新代码)
-    history := history ++ [(step, result)]
-    if (step-failed? result) and on-fail == 'backtrack -> restore(ckpt)
-  -> exhausted(history)         ; 交给 on-fail 处理:ask-human / abort
+  for n in 1..max-steps:
+    if (success?) -> return (success history)
+    step    := (llm-code (goal-render desc tools history))   ; LLM 产出下一条 s-expr
+    ckpt    := (capture)                                     ; 每步前快照全局 env
+    outcome := (eval-in step tools)                          ; 沙箱执行 -> (ok.v)|(err.msg)
+    if ok  -> record (n step => v)
+    if err -> (restore ckpt); record (n step ERR msg)        ; 回滚副作用,LLM 据历史重试
+  -> (exhausted history)
 ```
 
-要点:
-- **每步前 `capture`**,失败可回溯到上一个好状态(continuation + env 快照协同)。
-- LLM 只被允许调用 `#:tools` 白名单内的过程(见第 9 节安全模型)。
-- `history` 是 s-expr 数据,可被反思、摘要、用于自改进。
+要点(与实现一致):
+- **每步前 `capture`、出错 `restore`**:坏步的副作用被回滚(§6.1 状态检查点)。
+- **能力白名单由 `eval-in` 强制**:step 在**只含 tools 的隔离环境**里求值(无 parent),碰不到 `+`/`car`/`llm`/`redefine!` 等——想 `(set! total ...)` 绕过工具会因 `total` 不在沙箱而 unbound。这是第 9 节安全模型的落地。
+- **`history` 是 s-expr 数据**,回灌进 prompt 让 LLM 观察并自我纠错(实测:LLM 在 `(add 29)` 超限报错后,读历史改用 `(add 10)` 系列达成目标)。
+- 后续可加 `#:on-fail 'ask-human`(用 continuation 挂起等人)、子 goal、predicate 之外的预算约束(token/时间)。
 
 ### 8.4 `loop`(周期 / 自定步重入)
 
@@ -392,7 +395,7 @@ GOAL(desc, success?, tools, max-steps):
 | **M1 continuation** ✅ | `call/cc` 委托宿主 + `capture`/`restore` | 能用 call/cc 实现 generator;能快照/回滚全局 env |
 | **M2 LLM 原语** ✅ | `llm` 子进程 + `ask` + `llm-code` + `eval` + `gen` | `(gen "算 6*7")` → 42;`llm-code` 定义过程后可直接调用 |
 | **M3 amb** ✅ | `define-macro` 宏设施 + `amb`/`require` 回溯(纯库代码)+ `amb*` | 勾股数/约束求解通过;`amb*` 在运行时列表(可为 LLM 候选)间回溯 |
-| **M4 goal** | `goal-driver`(过程)+ step 循环 + 回溯 + 工具白名单 | 一个玩具 goal(如"让某测试通过")端到端达成 |
+| **M4 goal** ✅ | `goal-run`(L2 过程)+ `goal`(L3 宏)+ step 循环 + 每步快照回滚 + `eval-in` 工具白名单 | 玩具 goal(累加到目标)真实 LLM 端到端达成,含错误自恢复 |
 | **M5 loop** | `loop` 宏:`#:every` / `#:until` / `#:self-paced` | 周期任务与自定步任务各跑通一个 demo |
 | **M6 自修改** | `redefine!` + 事务 + 审计 + 安全模型 | agent 自我改写一个过程并在冒烟失败时回滚 |
 

@@ -73,4 +73,22 @@
                 [(e ev) (peval e ev)]))
   (def! 'current-env (lambda () g))
 
+  ;; eval-in(M4 能力白名单沙箱):在一个**只含指定绑定**的隔离环境里求值
+  ;; expr(无 parent,故只有 alist 里的工具 + 句法特殊形式可用,碰不到 +/car/
+  ;; llm/redefine 等),并捕获错误。alist 是 ((name . proc) ...)。
+  ;; 返回 (ok . value) 或 (err . message),供 goal driver 判定与回滚。
+  (def! 'eval-in
+        (lambda (expr alist)
+          (define e (make-env))
+          (let bind ([a alist])
+            (unless (null? a)
+              (env-define! e (caar a) (cdar a))
+              (bind (cdr a))))
+          (with-handlers ([exn:fail? (lambda (ex) (cons 'err (exn-message ex)))])
+            (cons 'ok (peval expr e)))))
+
+  ;; 渲染:把任意值/ s-expr 转成字符串(喂 prompt 用)
+  (def! '->string (lambda (x) (format "~a" x)))   ; display 风格
+  (def! 'repr     (lambda (x) (format "~s" x)))   ; write 风格(适合 s-expr)
+
   g)
