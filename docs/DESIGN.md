@@ -4,7 +4,18 @@
 > 直接对应到 AI agent 的三个核心诉求:**可自我重写的计划、可被 LLM 编织的求值循环、可暂停/回溯的执行状态**。
 > 语言原生支持 `goal`(追求目标直到达成)与 `loop`(周期/自定步重入),并支持**运行时自修改**。
 
-状态:**设计阶段(v0)**。本文是动手前的蓝图,不是最终实现。
+状态:M0–M6 已实现 + 自进化 / 自我生长 / 编排层已落地。
+
+## 定位(方向性结论)
+
+Piper 是 AI agent / harness 的**编排语言**,不是又一个 harness。
+
+- **harness**(如 Claude Code):把"模型+工具"变成**一个**会干活的 agent,agent loop 是**写死**的。
+- **编排器**(Piper):把**多个 agent run** 当可组合的值,组成结果——fan-out、投票、回溯、调度、自适应。
+- 分工:**模型(或 shell 出去的真 harness)当聪明 worker,语言当控制平面。**
+- 独特之处:**编排逻辑本身**是 `call/cc` 写的、可回溯(`amb`)、可事务(`capture/restore`)、可在运行时 `redefine!` 自我进化的程序——固定的 harness 循环 / 固定的 workflow API 给不了。
+
+这也解决了"模型一次就做完、语言没出力"的问题:在编排器里两者不抢戏,语言贡献的是搜索/回溯/调度/自适应逻辑,看得见、必须出力。`goal`/`loop` 只是两种内建编排模式,非终点。worker 接口:`ask`/`gen`/`llm-code`(LLM)、`shell`(真 harness/工具)、子 `goal`。编排组合子见 `lib/orchestrate.piper`。
 
 ---
 

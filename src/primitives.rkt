@@ -4,7 +4,7 @@
 ;; 只放最小的不可约原语;list/map/filter 等高阶或可派生的工具
 ;; 用 Piper 自身写在 lib/prelude.piper 里(以此检验求值器)。
 
-(require "env.rkt" "eval.rkt" "llm.rkt")
+(require racket/port "env.rkt" "eval.rkt" "llm.rkt")
 (provide make-global-env (struct-out checkpoint))
 
 ;; 状态检查点:全局环境某一刻的快照(纯数据)。
@@ -73,6 +73,24 @@
   (def! 'write   (lambda (x) (write x) (void)))
   (def! 'newline (lambda () (newline) (void)))
   (def! 'error   (lambda args (apply error 'piper args)))
+
+  ;; 真实世界原语(编排器:让 worker 能是真实 harness / 工具 / 文件)。
+  ;; 注意:这些是"危险原语",不在 eval-in 沙箱里,LLM/自修改代码默认碰不到。
+  (def! 'shell                ; 跑一条 shell 命令,返回 (退出码 . stdout+stderr)
+        (lambda (cmd)
+          (define-values (sp out in err) (subprocess #f #f #f "/bin/sh" "-c" cmd))
+          (close-output-port in)
+          (define o (port->string out))
+          (define e (port->string err))
+          (subprocess-wait sp)
+          (close-input-port out) (close-input-port err)
+          (cons (subprocess-status sp) (string-append o e))))
+  (def! 'read-file  (lambda (path) (call-with-input-file path port->string)))
+  (def! 'write-file (lambda (path s)
+                      (call-with-output-file path
+                        (lambda (p) (display s p)) #:exists 'replace)
+                      (void)))
+  (def! 'file-exists? file-exists?)
 
   ;; LLM 接入(M2):llm 原始补全、llm-code 生成 s-expr、eval 生成即运行
   (def! 'llm (case-lambda

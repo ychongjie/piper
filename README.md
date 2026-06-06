@@ -1,14 +1,25 @@
 # Piper
 
-一门 **AI 原生的 Lisp 方言**(基于 Racket)。把 SICP 的三件武器——
-**同像性、元循环求值器、一等 continuation**——对应到 AI agent 的三个核心诉求:
-**可自我重写的计划、可被 LLM 编织的求值循环、可暂停/回溯的执行状态**。
+一门 **AI agent / harness 的编排语言**(基于 Racket)。把 SICP 的三件武器——
+**同像性、元循环求值器、一等 continuation**——用作 agent 编排的控制平面:
+**可自我重写的编排策略、可被 LLM 编织的求值循环、可暂停/回溯/事务化的执行状态**。
 
-语言原生支持:
+**定位**:不是又一个 harness(像 Claude Code 那样的单 agent 系统),而是 harness 的
+**编排器**。模型(或 shell 出去的真 harness)当聪明 **worker**,Piper 当**控制平面**——
+分工清晰:模型负责聪明,语言负责控制。它的独特之处是**编排逻辑本身**是用 `call/cc`
+写的、可回溯、可事务、可在运行时 `redefine!` 自我进化的程序——这是固定的 harness 循环
+或固定的 workflow API 给不了的。
 
-- `goal` —— 追求一个目标直到达成(灵感来自 Claude Code 的 `/goal`)
-- `loop` —— 周期 / 自定步重入(灵感来自 Claude Code 的 `/loop`)
-- 运行时**自修改**(事务性 `redefine!`,坏了可回滚)
+把"一次 agent run"当可组合的值,语言提供控制平面:
+
+- **编排组合子** `fanout` / `best-of`(LLM 裁判)/ `vote` / `first-ok` / `retry` / `pipeline`(`lib/orchestrate.piper`)
+- **回溯搜索** `amb` / `require` —— 在 worker 候选间搜索、剪枝(`lib/amb.piper`)
+- **事务** `capture` / `restore` —— 给整段编排打检查点、失败整体回滚
+- **自适应** `redefine!` / `improve!` / `evolve!` —— 编排策略自我进化(`lib/self-modify.piper`)
+- **worker 接口** `ask` / `gen` / `llm-code`(LLM)、`shell`(真 harness/工具)、子 `goal`
+
+`goal`(目标循环)与 `loop`(周期/自定步重入)是其中两种内建编排模式
+(灵感来自 Claude Code 的 `/goal` 与 `/loop`),非终点。
 
 技术栈:**Racket + 原生 `call/cc` + [`llm`](https://github.com/simonw/llm) CLI 作为 LLM 原语**。
 

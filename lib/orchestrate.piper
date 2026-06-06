@@ -1,0 +1,61 @@
+;; 编排层:把"一次 agent run"当成可组合的值。
+;; Piper 的定位是 agent/harness 的【编排语言】——模型(或 shell 出去的真 harness)
+;; 当聪明 worker,语言当控制平面。worker = 一个 0 参 thunk,调用即产出一次结果
+;; (常见是 (lambda () (ask "...")) 或 (lambda () (shell "claude -p ..."))).
+;;
+;; 控制平面的独特之处(别的固定 harness/编排器没有):
+;;   - 回溯:amb 在 worker 候选间搜索,require 剪枝(见 lib/amb.piper)
+;;   - 事务:capture/restore 给整段编排打检查点、失败整体回滚
+;;   - 自适应:redefine! 让编排策略自己进化(见 lib/self-modify.piper)
+;; 本文件提供最常用的几个【组合子】。
+
+;; ---- 小工具 ----
+
+;; 按 score 取最高分的元素(score 每个元素只算一次,适合 score 调 LLM 的情况)
+(define (best-by items score)
+  (if (null? items)
+      #f
+      (let ((scored (map (lambda (x) (cons x (score x))) items)))
+        (car (foldl (lambda (p best) (if (> (cdr p) (cdr best)) p best))
+                    (car scored) (cdr scored))))))
+
+;; 计数:返回 ((值 . 次数) ...)
+(define (tally xs)
+  (foldl (lambda (x acc)
+           (let ((cell (assoc x acc)))
+             (if cell
+                 (map (lambda (c) (if (equal? (car c) x) (cons (car c) (add1 (cdr c))) c)) acc)
+                 (cons (cons x 1) acc))))
+         '() xs))
+
+;; ---- 编排组合子 ----
+
+;; fan-out:跑一组 worker,收集全部结果(MVP 顺序执行,语义为并发 fan-out)
+(define (fanout workers) (map (lambda (w) (w)) workers))
+
+;; best-of:跑 N 个 worker,用 score 选最优(score 可调 LLM 做裁判)
+(define (best-of workers score) (best-by (fanout workers) score))
+
+;; vote:跑 N 个 worker,多数表决(equal? 相同的结果归一类)
+(define (vote workers) (car (best-by (tally (fanout workers)) cdr)))
+
+;; first-ok:依次试 worker,返回第一个满足 ok? 的结果;都不行返回 #f
+(define (first-ok workers ok?)
+  (cond ((null? workers) #f)
+        (else (let ((r ((car workers))))
+                (if (ok? r) r (first-ok (cdr workers) ok?))))))
+
+;; retry:同一个 worker 反复试,直到 ok? 通过或用尽次数
+(define (retry worker ok? n)
+  (let loop ((i 1))
+    (let ((r (worker)))
+      (cond ((ok? r) r)
+            ((>= i n) r)
+            (else (loop (add1 i)))))))
+
+;; pipeline:把输入依次穿过各 stage(stage 是 (lambda (x) ...),可内含 worker)
+(define (pipeline x stages)
+  (if (null? stages) x (pipeline ((car stages) x) (cdr stages))))
+
+;; judge:让一个 LLM 裁判给候选打分(0-10),用于 best-of 的 score
+;; (define (n-out-of-10 desc) (lambda (cand) ...))  —— 见 examples

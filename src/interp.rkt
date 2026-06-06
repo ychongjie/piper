@@ -17,7 +17,7 @@
 ;; 标准库按顺序加载(后者可依赖前者)
 (define lib-files
   '("prelude.piper" "amb.piper" "agent.piper" "loop.piper"
-    "self-modify.piper" "grow.piper"))
+    "self-modify.piper" "grow.piper" "orchestrate.piper"))
 
 ;; 先把所有顶层 form 读进列表,再依次求值,返回最后一个值。
 ;; 关键:读到列表后,回溯(amb)跳回前面的 form 时,续延持有的是不可变的
