@@ -13,26 +13,30 @@
 (define (passed dir)
   (string->number (string-trim (cdr (shell (fmt "cd {} && python3 check.py" dir))))))
 
-;; 一个竞争者:复制隔离副本 → 派 agent 修 → 重新跑真实测试 → 返回 (通过数 . 副本目录)
-(define (contender i)
-  (define work (fmt "/tmp/fix-{}" i))
-  (shell (fmt "rm -rf {} && cp -r {} {}" work base work))
-  (agent work "修改 solution.py 使 check.py 输出的通过数尽量大;不要改 check.py")
-  (define score (passed work))
-  (display (fmt "  竞争者 {}:通过 {}\n" i score))
-  (cons score work))
+;; 第 i 号修复 worker:每次被调用都用【自己的隔离副本】,派 agent 修,
+;; 返回 (真实通过数 . 副本目录)。隔离封装在 worker 内部,于是能直接喂给 best。
+(define (fixer i)
+  (lambda (task)
+    (define work (fmt "/tmp/fix-{}" i))
+    (shell (fmt "rm -rf {} && cp -r {} {}" work base work))
+    (agent work task)                                  ; 执行层:pi 在隔离副本里改代码
+    (define score (passed work))                       ; 不信自我汇报,重跑真实测试
+    (display (fmt "  竞争者 {}:通过 {} / 7\n" i score))
+    (cons score work)))
 
 ;; 准备工作副本(仓库原文件保持不变)
 (shell (fmt "rm -rf {} && cp -r {} {}" base src base))
 (display (fmt "修复前通过:{} / 7\n" (passed base)))
-
-;; 开 N 个竞争者(各自隔离),按通过数择优
 (display (fmt "派 {} 个 agent 竞争修复…\n" n))
-(define results (map contender (range n)))
-(define winner  (best-by results car))      ; (通过数 . 目录) 里通过数最高的
+
+;; ★ 编排核心:best 把 N 个隔离 worker fan-out 到同一任务,按真实通过数择优
+(define winner
+  (best (map fixer (range n))
+        "修改 solution.py 使 check.py 输出的通过数尽量大;不要改 check.py"
+        car))                                          ; score = 通过数(结果的 car)
 
 ;; 胜者提交回工作副本
 (shell (fmt "cp {}/solution.py {}/solution.py" (cdr winner) base))
 (newline)
-(display (fmt "胜出副本:{}(通过 {} / 7)\n" (cdr winner) (car winner)))
+(display (fmt "胜出:{}(通过 {} / 7)\n" (cdr winner) (car winner)))
 (display (fmt "提交后通过:{} / 7\n" (passed base)))
