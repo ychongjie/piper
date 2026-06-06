@@ -16,7 +16,20 @@
 - **回溯搜索** `amb` / `require` —— 在 worker 候选间搜索、剪枝(`lib/amb.piper`)
 - **事务** `capture` / `restore` —— 给整段编排打检查点、失败整体回滚
 - **自适应** `redefine!` / `improve!` / `evolve!` —— 编排策略自我进化(`lib/self-modify.piper`)
-- **worker 接口** `ask` / `gen` / `llm-code`(LLM)、`shell`(真 harness/工具)、子 `goal`
+- **worker 接口** `ask` / `gen` / `llm-code`(LLM)、`shell`(真 harness/工具)、子 `goal`;统一适配器见 `lib/workers.piper`
+
+### worker 后端选型(开源模型友好 + 不额外付费)
+
+worker 后端保持中立(`lib/workers.piper`),同一套编排组合子对任意 worker 成立:
+
+| 后端 | 角色 | 开源模型 | 成本 | 用法 |
+|---|---|---|---|---|
+| **`llm`**(默认) | 薄补全 | ✅ 插件接 Ollama/本地/托管开源 | 最低 | `(llm-worker "deepseek-v4-pro")` |
+| **`pi`** | 厚 harness | ✅ `--provider/--model` 任意 | 你自己的开源端点 | `(pi-worker "ollama" "qwen2.5")` |
+| `claude` | 厚 harness | ❌ 锁 Anthropic | ⚠️ 订阅不含 headless,`-p` 计费 | `(claude-worker)`,慎用 |
+
+因为默认走 `llm`,Piper 天然能 **fan-out 到一组不同开源模型再 vote/best-of**
+(开源模型评审团,见 `examples/panel.piper`)——多样性来自不同模型,单模型给不了。
 
 `goal`(目标循环)与 `loop`(周期/自定步重入)是其中两种内建编排模式
 (灵感来自 Claude Code 的 `/goal` 与 `/loop`),非终点。

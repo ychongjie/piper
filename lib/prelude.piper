@@ -45,6 +45,11 @@
         ((equal? k (caar xs)) (car xs))
         (else (assoc k (cdr xs)))))
 
+(define (zip a b)
+  (if (or (null? a) (null? b))
+      '()
+      (cons (cons (car a) (car b)) (zip (cdr a) (cdr b)))))
+
 (define (range n)
   (define (go i) (if (>= i n) '() (cons i (go (add1 i)))))
   (go 0))

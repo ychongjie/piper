@@ -4,7 +4,7 @@
 ;; 只放最小的不可约原语;list/map/filter 等高阶或可派生的工具
 ;; 用 Piper 自身写在 lib/prelude.piper 里(以此检验求值器)。
 
-(require racket/port "env.rkt" "eval.rkt" "llm.rkt")
+(require racket/port racket/string "env.rkt" "eval.rkt" "llm.rkt")
 (provide make-global-env (struct-out checkpoint))
 
 ;; 状态检查点:全局环境某一刻的快照(纯数据)。
@@ -58,6 +58,9 @@
   (def! 'substring substring)
   (def! 'string-ref string-ref)
   (def! 'string=? string=?)
+  (def! 'string-trim string-trim)
+  ;; 把字符串安全地包成单引号 shell 参数(供 shell 调真 harness/工具用)
+  (def! 'shell-quote (lambda (s) (string-append "'" (string-replace s "'" "'\\''") "'")))
 
   ;; 字符
   (def! 'char->integer char->integer)

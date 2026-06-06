@@ -1,0 +1,38 @@
+;; worker 适配器:把不同后端统一成 worker = (lambda (task) -> 结果字符串)。
+;; Piper 是编排器,对 worker 后端保持中立。选型(约束:开源模型友好 + 不额外付费):
+;;   - 薄 worker(默认):llm-worker —— 走 simonw/llm,插件生态接 Ollama/本地/托管开源模型
+;;   - 厚 worker(开源):pi-worker —— 完整编码 harness,--provider/--model 任意开源模型
+;;   - claude-worker:⚠️ 订阅不含 headless,claude -p 走 API 计费,仅按需
+;; 同一套编排组合子(fanout/best-of/vote/amb,见 lib/orchestrate.piper)对任意 worker 成立。
+
+;; 薄 worker:指定模型的一次性补全(开源模型在 ~/.../io.datasette.llm 里配)
+(define (llm-worker model)
+  (lambda (task) (llm task "" model)))
+
+;; 厚 worker(开源):pi 跑一次完整 agent run,临时会话、可限工具
+(define (pi-worker provider model)
+  (lambda (task)
+    (cdr (shell (string-append
+                 "pi -p --no-session --mode text"
+                 " --provider " provider " --model " model
+                 " --tools read,bash "
+                 (shell-quote task))))))
+
+;; 厚 worker(付费,慎用):Claude Code headless —— 订阅不含,-p 计费
+(define (claude-worker)
+  (lambda (task)
+    (cdr (shell (string-append "claude -p --output-format text " (shell-quote task))))))
+
+;; 一组开源模型 -> 一组薄 worker(评审团)
+(define (model-workers models) (map llm-worker models))
+
+;; ---- 在一个 task 上调度一组 worker(把 task 适配到 0 参 thunk 组合子)----
+
+(define (ask-all task workers)            ; fan-out:每个 worker 各答一版,收集
+  (map (lambda (w) (w task)) workers))
+
+(define (vote-on task workers)            ; 多数表决
+  (vote (map (lambda (w) (lambda () (w task))) workers)))
+
+(define (best-on task workers score)      ; 按 score(可为 LLM 裁判)择优
+  (best-of (map (lambda (w) (lambda () (w task))) workers) score))
