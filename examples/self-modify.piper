@@ -1,0 +1,32 @@
+;; M6 真实端到端示例:运行时自修改(需要 llm CLI,默认 deepseek-v4-pro)。
+;; 运行:make run FILE=examples/self-modify.piper
+;;
+;; 一个有 bug 的过程,让 LLM 读自己的源码改正;冒烟测试不过就事务回滚。
+;; 这把 Piper 的全部支柱串了起来:同像性(procedure-source 取源)、
+;; 元循环器(eval 装入新定义)、continuation(capture/restore 事务)、LLM(改写)。
+
+;; 1) 一个本应求平方、却写成加倍的 sq
+(define (sq x) (+ x x))
+(display "改之前: sq(5) = ") (display (sq 5)) (newline)          ; 10(错)
+
+;; 冒烟:平方该满足 sq(5)=25 且 sq(4)=16
+(define (sq-ok?) (and (= (sq 5) 25) (= (sq 4) 16)))
+
+;; 2) 让 LLM 读源码、改正自己;不过就回滚
+(display "improve! -> ")
+(display (improve! 'sq "这个过程本应返回参数的平方,但实现有 bug,请修正。" sq-ok?))
+(newline)
+(display "改之后: sq(5) = ") (display (sq 5)) (newline)          ; 25(对)
+
+;; 3) 事务安全:让 LLM 乱改,但冒烟要求一个不可能的结果 -> 自动回滚,sq 保持正确
+(display "坏改(不可能的冒烟)-> ")
+(display (improve! 'sq "随便改成别的实现" (lambda () (= (sq 5) 999))))
+(newline)
+(display "回滚后: sq(5) = ") (display (sq 5)) (newline)          ; 仍是 25
+
+;; 4) 安全模型:核心绑定不可被 redefine!
+(display "protected? restore = ") (display (protected? 'restore)) (newline)  ; #t
+
+;; 5) 审计日志:每次自修改尝试(含被回滚的)都有记录
+(display "审计日志(seq name old-src new-src reason):\n")
+(for-each (lambda (r) (display "  ") (display (repr r)) (newline)) (redefine-log))

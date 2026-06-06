@@ -12,7 +12,7 @@
 
 技术栈:**Racket + 原生 `call/cc` + [`llm`](https://github.com/simonw/llm) CLI 作为 LLM 原语**。
 
-状态:**M0–M5 完成**(求值器 + continuation + LLM + 宏/amb + goal 目标循环 + loop 重入)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
+状态:**M0–M6 全部里程碑完成** 🎉(求值器 + 一等 continuation + LLM 接入 + 宏/amb 回溯 + goal 目标循环 + loop 重入 + 运行时自修改)。108 测试全绿。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
 
 ## 快速上手
 
@@ -48,4 +48,8 @@ M5 实现 `loop`:`(times N)` / `(until PRED [every S])` / `(self-paced)` 重入,
 给每轮一个 `break` 续延;自定步由 body 返回的指令 `(continue)`/`(delay s)`/`(stop v)` 决定调度
 ——这正是 LLM 控制循环的接口(`lib/loop.piper`,见 `examples/loop.piper`)。
 
-`redefine!` 运行时自修改在后续里程碑(M6)。
+M6 实现运行时自修改:`redefine!`/`force-redefine!`、`procedure-source`(同像性取闭包源)、
+`redefine-log`(审计)、`try`(安全冒烟)、核心绑定保护,以及助手 `improve!`——
+用 LLM 读自己的源码改正,冒烟不过则事务回滚(`lib/self-modify.piper`,见
+`examples/self-modify.piper`,真实 LLM)。这把同像性 + 元循环器 + continuation + LLM
+四根支柱串成完整闭环。

@@ -28,7 +28,8 @@
 
   ;; pair / list
   (def! 'cons cons) (def! 'car car) (def! 'cdr cdr)
-  (def! 'caar caar) (def! 'cadr cadr) (def! 'cddr cddr) (def! 'caddr caddr)
+  (def! 'caar caar) (def! 'cadr cadr) (def! 'cddr cddr)
+  (def! 'caddr caddr) (def! 'cadddr cadddr) (def! 'cdaddr cdaddr)
   (def! 'list list)
   (def! 'null? null?) (def! 'pair? pair?) (def! 'list? list?)
 
@@ -87,11 +88,54 @@
           (with-handlers ([exn:fail? (lambda (ex) (cons 'err (exn-message ex)))])
             (cons 'ok (peval expr e)))))
 
+  ;; try:安全调用一个 0 参 thunk,捕获错误。返回 (ok . value) | (err . message)。
+  ;; 自修改的安全网:坏的重定义可能让冒烟测试本身抛错,improve! 用它把"抛错"也当失败。
+  (def! 'try (lambda (thunk)
+               (with-handlers ([exn:fail? (lambda (ex) (cons 'err (exn-message ex)))])
+                 (cons 'ok (papply thunk '())))))
+
   ;; 渲染:把任意值/ s-expr 转成字符串(喂 prompt 用)
   (def! '->string (lambda (x) (format "~a" x)))   ; display 风格
   (def! 'repr     (lambda (x) (format "~s" x)))   ; write 风格(适合 s-expr)
 
   ;; 宿主定时器(M5 loop 的 #:every / self-paced delay 用)
   (def! 'sleep (lambda (secs) (sleep secs) (void)))
+
+  ;; ---- M6:运行时自修改 ----
+
+  ;; procedure-source:同像性兑现 —— 闭包的源就是 s-expr。
+  ;; 闭包 -> (lambda <params> body...);原语 -> (primitive name);其它 -> 原值
+  (define (proc-source v)
+    (cond [(closure? v)   (cons 'lambda (cons (closure-params v) (closure-body v)))]
+          [(primitive? v) (list 'primitive (primitive-name v))]
+          [else v]))
+  (def! 'procedure-source proc-source)
+
+  ;; 核心保护:这些绑定关系到自修改/事务的安全,redefine! 默认拒绝改写
+  (define protected
+    '(redefine! force-redefine! restore capture eval eval-in
+      procedure-source redefine-log protected?))
+  (def! 'protected? (lambda (name) (and (memq name protected) #t)))
+
+  ;; 审计日志(append-only,本解释器私有,restore 不会清掉它)
+  (define audit '())   ; 新的在前
+  (define seq 0)
+  (define (do-redefine! force? name newval reason)
+    (unless (symbol? name) (error 'redefine! "名字必须是符号: ~s" name))
+    (when (and (not force?) (memq name protected))
+      (error 'redefine! "拒绝改写受保护的核心绑定: ~a(如确需请用 force-redefine!)" name))
+    (define old (if (hash-has-key? (env-vars g) name)
+                    (hash-ref (env-vars g) name) 'undefined))
+    (set! seq (add1 seq))
+    (set! audit (cons (list seq name (proc-source old) (proc-source newval) reason) audit))
+    (env-define! g name newval)
+    name)
+  (def! 'redefine! (case-lambda
+                     [(n v)   (do-redefine! #f n v "")]
+                     [(n v r) (do-redefine! #f n v r)]))
+  (def! 'force-redefine! (case-lambda
+                           [(n v)   (do-redefine! #t n v "")]
+                           [(n v r) (do-redefine! #t n v r)]))
+  (def! 'redefine-log (lambda () (reverse audit)))   ; 最早在前
 
   g)

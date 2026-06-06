@@ -371,20 +371,26 @@ goal-run(desc, success?, tools, max-steps):
 ```
 
 - `capture`/`restore`:状态检查点(§6.1),只滚全局环境、不做控制跳转;`restore` 后线性继续。**M1 已实现。**
-- `redefine!`:改写全局 frame 里的绑定;`procedure-source` 取闭包源(因同像性,源就是 s-expr)。(M6)
+- `redefine!`:改写全局 frame 里的绑定;`procedure-source` 取闭包源(因同像性,源就是 s-expr)。**M6 已实现。**
+
+**M6 实现(`lib/self-modify.piper` + `src/primitives.rkt`)**:
+
+- `procedure-source` 闭包 → `(lambda params body...)`;`redefine!`/`force-redefine!` 改写全局绑定并写审计;`redefine-log` 返回审计(seq name old-src new-src reason);`try` 安全调用 thunk(冒烟测试可能抛错,也当失败)。
+- `improve! name 指令 smoke-ok?`:`capture` → LLM 读 `(procedure-source (eval name))` 改写 → `redefine!` → `try` 跑冒烟 → 不过(返回假或抛错)则 `restore`。返回 `kept`/`rolled-back`。
+- 实测:LLM 把 `(lambda (x) (+ x x))` 修成 `(lambda (x) (* x x))`(kept);要求不可能的冒烟时改动被回滚(rolled-back),且两次尝试都留在审计日志里。
 
 ---
 
 ## 9. 自修改安全模型
 
-自修改是核心卖点,也是最大风险。控制手段:
+自修改是核心卖点,也是最大风险。控制手段(✅ = 已实现):
 
-1. **能力白名单**:LLM 生成的代码默认运行在**受限环境**里,只能访问显式授予的工具(`#:tools`)。`shell`/文件写/网络等"危险原语"必须显式注入,否则在受限环境查不到绑定。
-2. **核心保护**:`eval`/`apply`/`redefine!`/`restore` 等核心绑定标记为 protected,`redefine!` 拒绝改写它们(除非显式 `--allow-core`)。
-3. **事务 + 冒烟测试**:所有自修改走 `capture`/`restore` 事务;改完跑冒烟测试,不过即回滚。
-4. **审计日志**:每次 `redefine!` 记录(时间、目标、旧源、新源、触发原因)到 append-only 日志,可回放/审查。
-5. **预算约束**:`goal`/`loop` 带 `#:max-steps` / token / 时间预算,防失控。
-6. **人审挂起点**:`#:on-fail 'ask-human` 或工具标 `#:requires-approval`,用 continuation 挂起等人确认。
+1. **能力白名单 ✅**:LLM 生成的代码经 `eval-in` 在**只含授予工具的隔离环境**里求值,碰不到 `+`/`car`/`llm`/`redefine!` 等(M4)。
+2. **核心保护 ✅**:`redefine!`/`restore`/`capture`/`eval`/`eval-in`/`procedure-source` 等标记为 protected,`redefine!` 拒绝改写(需显式 `force-redefine!`)(M6)。
+3. **事务 + 冒烟测试 ✅**:自修改走 `capture`/`restore` 事务,`try` 跑冒烟,返回假或抛错即回滚(M1+M6)。
+4. **审计日志 ✅**:`redefine-log` append-only 记录(seq、目标、旧源、新源、原因),含被回滚的尝试(M6)。
+5. **预算约束 ✅(部分)**:`goal` 带 `max-steps`;`loop` 有 `times`/`until`/`self-paced`。token/时间预算待加。
+6. **人审挂起点 ⏳**:`on-fail 'ask-human` / 工具标 `requires-approval` 用 continuation 挂起等人——待加(地基 `call/cc` 已具备)。
 
 ---
 
@@ -398,7 +404,7 @@ goal-run(desc, success?, tools, max-steps):
 | **M3 amb** ✅ | `define-macro` 宏设施 + `amb`/`require` 回溯(纯库代码)+ `amb*` | 勾股数/约束求解通过;`amb*` 在运行时列表(可为 LLM 候选)间回溯 |
 | **M4 goal** ✅ | `goal-run`(L2 过程)+ `goal`(L3 宏)+ step 循环 + 每步快照回滚 + `eval-in` 工具白名单 | 玩具 goal(累加到目标)真实 LLM 端到端达成,含错误自恢复 |
 | **M5 loop** ✅ | `loop`(L3 宏)+ `loop-times/until/self-paced`(L2)+ call/cc break | until/break/self-paced 测试通过;LLM 自定步真实端到端跑通 |
-| **M6 自修改** | `redefine!` + 事务 + 审计 + 安全模型 | agent 自我改写一个过程并在冒烟失败时回滚 |
+| **M6 自修改** ✅ | `redefine!` / `force-redefine!` / `procedure-source` / `redefine-log` / `try` + `improve!` | 真实 LLM 读源码改正自己,冒烟不过事务回滚;核心绑定受保护 |
 
 每个里程碑配示例 + 测试,放 `examples/` 与 `tests/`。
 

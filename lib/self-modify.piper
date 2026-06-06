@@ -1,0 +1,30 @@
+;; M6:事务性自修改助手(纯库代码,建在 redefine! / capture / restore /
+;; procedure-source / llm-code 之上)。DESIGN §8.5、§9。
+
+;; improve! :用 LLM 重写 name 当前指向的过程,冒烟测试不过则整体回滚。
+;;   name        被改过程的符号(如 'area)
+;;   instruction 自然语言改写要求
+;;   smoke-ok?   0 参谓词,返回真表示新实现可接受
+;; 返回 'kept | 'rolled-back。无论结果如何,这次尝试都会进 redefine-log。
+(define (improve! name instruction smoke-ok?)
+  (define ckpt (capture))
+  (define old-src (procedure-source (eval name)))
+  (define new-impl
+    (eval (llm-code
+           (string-append
+            instruction "\n"
+            "下面是当前实现。请只返回一个改进后的 lambda(单个 s-expression,"
+            "不要解释、不要 markdown):\n"
+            (repr old-src)))))
+  (redefine! name new-impl (string-append "improve!: " instruction))
+  ;; 用 try 包冒烟:返回假 **或** 抛错都算失败 -> 回滚
+  (define smoke (try smoke-ok?))
+  (if (and (eq? (car smoke) 'ok) (cdr smoke))
+      'kept
+      (begin (restore ckpt) 'rolled-back)))
+
+;; with-checkpoint :在事务里跑 thunk,thunk 返回假则回滚。返回 thunk 的结果。
+(define (with-checkpoint thunk)
+  (define ckpt (capture))
+  (define result (thunk))
+  (if result result (begin (restore ckpt) #f)))
