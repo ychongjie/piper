@@ -77,7 +77,9 @@ pi 需要自己的 provider。用 pi 的 **Custom Provider** 指到你现有的 
 
 技术栈:**Racket + 原生 `call/cc` + [`llm`](https://github.com/simonw/llm) CLI 作为 LLM 原语**。
 
-状态:**M0–M6 全部里程碑完成** 🎉(求值器 + 一等 continuation + LLM 接入 + 宏/amb 回溯 + goal 目标循环 + loop 重入 + 运行时自修改)。108 测试全绿。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
+状态:**M0–M6 全部里程碑完成** 🎉(求值器 + 一等 continuation + LLM 接入 + 宏/amb 回溯 + goal 目标循环 + loop 重入 + 运行时自修改),并已重构为 agent 编排语言(认知层/执行层两层 + 精简编排词汇)。路线见 [docs/DESIGN.md](docs/DESIGN.md) §10。
+
+> 一页速查:[docs/CHEATSHEET.md](docs/CHEATSHEET.md) —— 12 个编排词 + Scheme 基础。
 
 ## 快速上手
 
