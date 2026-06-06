@@ -48,6 +48,8 @@
        [(lambda) (closure (cadr exp) (cddr exp) env)]
        [(begin)  (eval-seq (cdr exp) env)]
        [(let)    (eval-let exp env)]
+       [(let*)   (eval-let* exp env)]
+       [(letrec) (eval-letrec exp env)]
        [(cond)   (eval-cond (cdr exp) env)]
        [(and)    (eval-and (cdr exp) env)]
        [(or)     (eval-or  (cdr exp) env)]
@@ -94,13 +96,40 @@
     [(null? (cdr exps)) (peval (car exps) env)]
     [else (peval (car exps) env) (eval-seq (cdr exps) env)]))
 
-;; (let ((x e) ...) body...)  —— 各初值在外层环境求值,再绑成新 frame
+;; (let ((x e) ...) body...)         —— 各初值在外层环境求值,再绑成新 frame
+;; (let name ((x e) ...) body...)    —— 具名 let:name 绑到一个可递归调用的过程
 (define (eval-let exp env)
-  (define bindings (cadr exp))
+  (if (symbol? (cadr exp))
+      (eval-named-let exp env)
+      (let ([inner (make-env env)])
+        (for-each
+         (lambda (b) (env-define! inner (car b) (peval (cadr b) env)))
+         (cadr exp))
+        (eval-seq (cddr exp) inner))))
+
+;; 具名 let = 一个就地定义并立即调用的递归过程
+(define (eval-named-let exp env)
+  (define name (cadr exp))
+  (define bindings (caddr exp))
+  (define proc-env (make-env env))             ; name 在此可见,供递归
+  (define proc (closure (map car bindings) (cdddr exp) proc-env))
+  (env-define! proc-env name proc)
+  (papply proc (map (lambda (b) (peval (cadr b) env)) bindings)))
+
+;; (let* ((x e) ...) body...) —— 顺序绑定:后面的初值能看到前面的
+(define (eval-let* exp env)
   (define inner (make-env env))
   (for-each
-   (lambda (b) (env-define! inner (car b) (peval (cadr b) env)))
-   bindings)
+   (lambda (b) (env-define! inner (car b) (peval (cadr b) inner)))
+   (cadr exp))
+  (eval-seq (cddr exp) inner))
+
+;; (letrec ((f e) ...) body...) —— 递归/互递归绑定:先占位再求值,故 lambda 间可互相引用
+(define (eval-letrec exp env)
+  (define inner (make-env env))
+  (define bindings (cadr exp))
+  (for-each (lambda (b) (env-define! inner (car b) (void))) bindings)
+  (for-each (lambda (b) (env-set! inner (car b) (peval (cadr b) inner))) bindings)
   (eval-seq (cddr exp) inner))
 
 (define (eval-cond clauses env)

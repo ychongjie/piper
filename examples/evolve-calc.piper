@@ -1,0 +1,48 @@
+;; 自进化的字符串四则运算计算器(需要 llm CLI,默认 deepseek-v4-pro)。
+;; 运行:make run FILE=examples/evolve-calc.piper
+;;
+;; 目标:一个支持 优先级 + 括号 + 多位数 + 空格 的表达式计算器,
+;;   (calc "3+4*2-(1+1)") => 9
+;; 这是"人或大模型一次很难写全对"的典型:左结合、嵌套括号、空格、多位数,
+;; 任一处理漏掉就会有用例挂。我们不手写它,而是让它在测试表上自我进化。
+
+;; 起点:一个完全不会算的桩(只会把整串当数字)
+(define (calc s) (string->number s))
+
+;; 测试表 = 确定性适应度函数(覆盖各种坑)
+(define cases
+  (list
+   (list "7" 7)                     ; 单数
+   (list "12+34" 46)                ; 多位数
+   (list "2+3*4" 14)                ; 乘法优先
+   (list "2*3+4" 10)
+   (list "10-2-3" 5)                ; 左结合(不是 11)
+   (list "100/10/2" 5)             ; 除法左结合
+   (list "(1+2)*3" 9)              ; 括号
+   (list "2*(3+4)" 14)
+   (list "((1+2)*(3+4))" 21)      ; 嵌套括号
+   (list "1+2*3-4/2" 5)
+   (list "3 + 4 * 2 - ( 1 + 1 )" 9) ; 空格
+   (list "2*3*4" 24)))
+
+(display "进化前失败数:")
+(display (length (suite-failures calc cases))) (newline)
+
+(define result
+  (evolve! 'calc cases
+    "请实现一个计算器函数,签名 (lambda (s) ...):入参 s 是一个表达式字符串,
+     支持非负整数、+ - * /、括号、以及任意空格;遵循通常优先级且 + - * / 左结合;
+     返回计算结果(数值)。可用原语:string->list、char-numeric?、char=?、
+     char->integer、string->number、substring、string-ref、car/cdr/cons 等。"
+    8))
+
+(newline)
+(display "结果:") (display result) (newline)
+(display "进化后:\n")
+(display "  3+4*2-(1+1)        = ") (display (calc "3+4*2-(1+1)")) (newline)
+(display "  ((1+2)*(3+4))      = ") (display (calc "((1+2)*(3+4))")) (newline)
+(display "  10-2-3             = ") (display (calc "10-2-3")) (newline)
+
+(newline)
+(display "最终进化出的源码:\n  ")
+(display (repr (procedure-source calc))) (newline)

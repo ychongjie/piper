@@ -52,6 +52,10 @@
 (define (last xs)
   (if (null? (cdr xs)) (car xs) (last (cdr xs))))
 
+;; 常用控制宏(用 define-macro 长出来,核心保持小)
+(define-macro (when c . body)   (list 'if c (cons 'begin body) #f))
+(define-macro (unless c . body) (list 'if c #f (cons 'begin body)))
+
 ;; ---- M2:LLM 接入 ----
 ;; (llm prompt) / (llm-code prompt) / (eval expr) 是原语;这里加便捷封装。
 

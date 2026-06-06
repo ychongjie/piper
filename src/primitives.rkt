@@ -50,8 +50,23 @@
   (def! 'string-append string-append)
   (def! 'string-length string-length)
   (def! 'number->string number->string)
+  (def! 'string->number string->number)        ; 非数字返回 #f
   (def! 'string->symbol string->symbol)
   (def! 'symbol->string symbol->string)
+  (def! 'string->list string->list)
+  (def! 'list->string list->string)
+  (def! 'substring substring)
+  (def! 'string-ref string-ref)
+  (def! 'string=? string=?)
+
+  ;; 字符
+  (def! 'char->integer char->integer)
+  (def! 'integer->char integer->char)
+  (def! 'char=? char=?)
+  (def! 'char<? char<?) (def! 'char>? char>?)
+  (def! 'char<=? char<=?) (def! 'char>=? char>=?)
+  (def! 'char-numeric? char-numeric?)
+  (def! 'char-whitespace? char-whitespace?)
 
   ;; I/O
   (def! 'display (lambda (x) (display x) (void)))

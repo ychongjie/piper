@@ -17,6 +17,9 @@
     (repl env)))
 
 (module+ main
+  ;; 行缓冲:输出重定向到文件/管道时也能实时看到进展(默认是块缓冲)
+  (when (file-stream-port? (current-output-port))
+    (file-stream-buffer-mode (current-output-port) 'line))
   (define args (current-command-line-arguments))
   (define env (make-interpreter))
   (cond

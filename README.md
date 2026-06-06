@@ -53,3 +53,15 @@ M6 实现运行时自修改:`redefine!`/`force-redefine!`、`procedure-source`(�
 用 LLM 读自己的源码改正,冒烟不过则事务回滚(`lib/self-modify.piper`,见
 `examples/self-modify.piper`,真实 LLM)。这把同像性 + 元循环器 + continuation + LLM
 四根支柱串成完整闭环。
+
+### 自进化函数(`examples/evolve-calc.piper`)
+
+`evolve!`(`lib/self-modify.piper`)是**失败驱动的自我进化**:给一个确定性测试表,
+每轮把"当前源码 + 失败的具体用例"喂给 LLM 要新实现,只保留严格减少失败数的版本
+(退步则 `restore` 回滚)——带 LLM 变异的爬山法。实测:从 `(lambda (s) (string->number s))`
+出发,deepseek-v4-pro **一轮**就进化出完整的 tokenizer + 递归下降计算器,通过全部
+优先级/括号/多位数/空格用例。
+
+为支撑 LLM 写出的地道 Scheme,求值器已补 `letrec` / 具名 `let` / `let*` / `when` / `unless`
+及字符串-字符原语(`string->list`/`char-numeric?`/`string-ref`/`substring`/...)。
+LLM 调用默认把输入/输出/耗时打到 stderr(`current-llm-verbose`),便于观察 agent 进展。
