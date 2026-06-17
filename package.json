@@ -1,0 +1,21 @@
+{
+  "name": "piper",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "厚编排层(test-time compute + 客观验收)构建在 pi SDK 之上",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.4",
+    "@earendil-works/pi-coding-agent": "^0.79.4",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "^22"
+  }
+}

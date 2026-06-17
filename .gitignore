@@ -3,3 +3,11 @@ compiled/
 *.zo
 .DS_Store
 logs/
+
+# TS / pi SDK
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
