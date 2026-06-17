@@ -25,11 +25,17 @@ export {
   type Dispatch,
   type DispatchInput,
   type DispatchResult,
-  goal,
+  goal as goalLoop, // 运行时外环原语(声明式 builder goal 见下)
   piDispatch,
   subscribeWorkerEvents,
 } from "./goal.ts";
-export { type LoopOptions, type LoopResult, type TickContext, type TickResult, loop } from "./loop.ts";
+export {
+  type LoopOptions,
+  type LoopResult,
+  type TickContext,
+  type TickResult as LoopTickResult,
+  loop as scheduleLoop, // 运行时定时调度(声明式 builder loop 见下)
+} from "./loop.ts";
 
 // test-time compute
 export {
@@ -64,3 +70,33 @@ export { type GitDiffTouchesResult, gitDiffTouches } from "./verifiers/git.ts";
 
 // 通用 GitLab 只读访问
 export { type GitlabReader, type Job, type Pipeline, gitlabReader } from "./ci/gitlab.ts";
+
+// ===== 蒸馏式 agent 原语面(loop/goal/panel/guard + 固化 + YAML)=====
+// panel:一组独立判官(活的判断)
+export { type PanelOpts, type PanelResult, type Verdict, panel } from "./panel.ts";
+// crystallize:把机械意图固化成可复用脚本 + 自修
+export {
+  type CrystallizableAction,
+  type CrystalCache,
+  type CrystallizeResult,
+  crystallize,
+  fileCache,
+} from "./crystallize.ts";
+// agent 节点模型 + TS builder + 运行时
+export {
+  type AgentDef,
+  type GoalDef,
+  type GuardRule,
+  type PanelDef,
+  type RunDeps,
+  type TickResult,
+  type VerifyDef,
+  agent,
+  check,
+  goal,
+  loop,
+  panelOf,
+  runAgent,
+} from "./agent.ts";
+// YAML loader(与 TS builder 等价)
+export { loadAgentYaml } from "./yaml.ts";
