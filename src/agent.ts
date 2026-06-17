@@ -69,7 +69,9 @@ export async function runAgent(a: AgentDef, deps: RunDeps): Promise<TickResult> 
     skills: a.loop.do.using,
     cwd: deps.cwd,
     danger: null, // 只读
-    verify: (out) => out.trim().length > 0 && !/error|fail/i.test(out.split("\n").pop() ?? ""),
+    // 真验收契约:输出必须含一个合理的构建标识(版本号样式 如 26.06.001),否则视为没拿到。
+    // 防"弱验收"——光看"非空 / 无 error 字样"会被中文报错或 404 body 蒙混过关。
+    verify: (out) => /\b\d{2}\.\d{2}\.\d{2,}/.test(out),
   };
   log(`[agent:${a.name}] 触发器固化:${a.loop.on}`);
   let signal: string | null = null;
