@@ -97,6 +97,7 @@ export {
   loop,
   panelOf,
   runAgent,
+  runSentinel,
 } from "./agent.ts";
 // YAML loader(与 TS builder 等价)
 export { loadAgentYaml } from "./yaml.ts";

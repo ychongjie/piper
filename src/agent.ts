@@ -1,10 +1,11 @@
 // 蒸馏式 agent 的节点模型 + TS builder + 运行时。
 // 一份 agent = loop(on=固化触发器) → do(goal,用 skill 做) → verify(panel,独立判官) + guard(授权闸)。
-// YAML 和 TS 都编译到这个 AgentDef(窄腰),由 runAgent 执行。
+// YAML 和 TS 都编译到这个 AgentDef(窄腰)。runAgent=单 tick;runSentinel=常驻哨兵(loop+去重+持久化)。
 
 import type { defineTool } from "@earendil-works/pi-coding-agent";
-import { type CrystalCache, type CrystallizableAction, crystallize } from "./crystallize.ts";
+import { type CrystallizableAction, crystallize } from "./crystallize.ts";
 import type { EscalationHandler } from "./escalate.ts";
+import { loop as scheduleLoop } from "./loop.ts";
 import { type PanelResult, panel } from "./panel.ts";
 
 export interface AgentDef {
@@ -22,7 +23,7 @@ export type VerifyDef = { check: string } | { panel: PanelDef };
 export interface PanelDef {
   n: number;
   judge: string;
-  ground: string[]; // 取证工具的 NL 描述(各自固化 / 注册)
+  ground: string[];
   labels?: string[];
   escalateIf?: string;
 }
@@ -31,76 +32,81 @@ export interface GuardRule {
   require: string;
 }
 
-// ---- TS builder(让 TS 创作面和 YAML 等价)----
+// ---- TS builder(和 YAML 等价)----
 export const agent = (name: string, meta: Omit<AgentDef, "name" | "loop">, loop: AgentDef["loop"]): AgentDef => ({ name, loop, ...meta });
 export const loop = (on: string, doGoal: GoalDef, every?: string) => ({ on, every, do: doGoal });
 export const goal = (nl: string, o: { using?: string[]; verify: VerifyDef }): GoalDef => ({ nl, ...o });
 export const panelOf = (n: number, judge: string, o: { ground: string[]; labels?: string[]; escalateIf?: string }): VerifyDef => ({ panel: { n, judge, ...o } });
 export const check = (nl: string): VerifyDef => ({ check: nl });
 
-// ---- 运行时依赖(项目侧注入:固化缓存、升级、取证工具、被验的失败用例来源)----
+// ---- 运行时依赖(项目侧注入)----
 export interface RunDeps {
-  cache: CrystalCache;
+  cache: import("./crystallize.ts").CrystalCache;
   escalate: EscalationHandler;
-  // 把 panel 的 ground NL 列表解析成真实取证工具(项目注册表;git 真跑、查引擎等)
-  resolveGround: (groundNl: string[]) => ReturnType<typeof defineTool>[];
-  // 触发器/动作工作目录(如隔离 clone)
+  resolveGround: (groundNl: string[]) => ReturnType<typeof defineTool>[]; // panel ground NL → 真实取证工具
   cwd?: string;
-  // 演示/真实:goal 跑测后拿到的"待判失败用例上下文"(真实里来自跑测;这里可注入历史真实用例)
-  caseForVerify?: () => Promise<{ judgeContext: string } | null>;
+  caseForVerify?: () => Promise<{ judgeContext: string } | null>; // 待判失败用例(真实里来自跑测)
+  buildIdOf?: (signal: string) => string; // 从 signal 抽稳定 build id(默认解析 ref_name/版本号)
   onLog?: (m: string) => void;
 }
 
 export interface TickResult {
-  signal: string | null; // 探到的新构建
-  verify?: PanelResult; // verify 判官结论
-  guardsBlocked: string[]; // 被授权闸拦下的危险写
+  signal: string | null;
+  buildId: string | null;
+  verify?: PanelResult;
+  guardsBlocked: string[];
 }
 
-/** 跑一个 tick:固化触发器探新构建 → (goal 受 guard)→ verify 用 panel 独立判官。 */
-export async function runAgent(a: AgentDef, deps: RunDeps): Promise<TickResult> {
-  const log = deps.onLog ?? (() => {});
-  const guardsBlocked: string[] = [];
+const DEFAULT_BUILD_ID = (signal: string): string => {
+  try {
+    const j = JSON.parse(signal);
+    return String(j.ref_name ?? j.id ?? signal);
+  } catch {
+    const m = signal.match(/\d{2}\.\d{2}\.\d{2,}[\w.-]*/);
+    return m ? m[0] : signal.trim().slice(0, 60);
+  }
+};
 
-  // ① 触发器:固化成只读轮询脚本,探当前最新构建。
+// ① 探测:固化触发器成只读轮询脚本,探当前最新构建,抽稳定 build id。
+async function detectSignal(a: AgentDef, deps: RunDeps, log: (m: string) => void): Promise<{ raw: string; buildId: string } | null> {
   const trigger: CrystallizableAction = {
     id: `${a.name}__trigger`,
     nl: a.loop.on,
     skills: a.loop.do.using,
     cwd: deps.cwd,
-    danger: null, // 只读
-    // 真验收契约:输出必须含一个合理的构建标识(版本号样式 如 26.06.001),否则视为没拿到。
-    // 防"弱验收"——光看"非空 / 无 error 字样"会被中文报错或 404 body 蒙混过关。
+    danger: null,
+    // 真验收:输出必须含合理的构建标识(版本号样式),防弱验收缓存垃圾。
     verify: (out) => /\b\d{2}\.\d{2}\.\d{2,}/.test(out),
   };
-  log(`[agent:${a.name}] 触发器固化:${a.loop.on}`);
-  let signal: string | null = null;
   try {
     const t = await crystallize(trigger, { cache: deps.cache, escalate: deps.escalate, maxRepairs: 1, onLog: log });
-    signal = t.signal || null;
-    log(`[agent:${a.name}] 触发器(${t.mode}) → 新构建信号 = ${signal ?? "(无)"}`);
+    if (!t.signal) return null;
+    return { raw: t.signal, buildId: (deps.buildIdOf ?? DEFAULT_BUILD_ID)(t.signal) };
   } catch (e) {
-    log(`[agent:${a.name}] 触发器固化未成(${(e as Error).message});继续(机制已演示)`);
+    log(`[${a.name}] 触发器固化未成:${(e as Error).message}`);
+    return null;
   }
+}
 
-  // ② goal:更新环境+跑测。动共享资源的步骤先过 guard(授权闸)。
+// ② do:更新环境+跑测(动共享资源过 guard)→ verify(失败用例用 panel 独立判官)。
+async function runDo(a: AgentDef, _buildId: string, deps: RunDeps, log: (m: string) => void): Promise<{ verify?: PanelResult; guardsBlocked: string[] }> {
+  const guardsBlocked: string[] = [];
   for (const g of a.guard ?? []) {
     const res = await deps.escalate({ kind: "authorization", reason: `${g.when} → ${g.require}`, options: ["approve", "deny"] });
     if (res.decision !== "approve") {
       guardsBlocked.push(g.when);
-      log(`[agent:${a.name}] 授权闸拦下:${g.when}(无人值守→${res.decision})`);
+      log(`授权闸拦下:${g.when}(无人值守→${res.decision})`);
     }
   }
-  log(`[agent:${a.name}] goal:${a.loop.do.nl} —— 用 ${(a.loop.do.using ?? []).join("/")} skill(provision/teardown 受 guard)`);
+  log(`goal:${a.loop.do.nl} —— 用 ${(a.loop.do.using ?? []).join("/")} skill(provision/teardown 受 guard)`);
 
-  // ③ verify:有失败用例就用 panel 独立判官(执行者≠判官)。
-  const verifyDef = a.loop.do.verify;
   let verify: PanelResult | undefined;
-  if ("panel" in verifyDef) {
+  const vd = a.loop.do.verify;
+  if ("panel" in vd) {
     const c = deps.caseForVerify ? await deps.caseForVerify() : null;
     if (c) {
-      const p = verifyDef.panel;
-      log(`[agent:${a.name}] verify:起 ${p.n} 个独立判官……`);
+      const p = vd.panel;
+      log(`verify:起 ${p.n} 个独立判官……`);
       verify = await panel(
         {
           n: p.n,
@@ -108,15 +114,54 @@ export async function runAgent(a: AgentDef, deps: RunDeps): Promise<TickResult> 
           ground: deps.resolveGround(p.ground),
           labels: p.labels,
           escalateLabels: p.labels?.filter((l) => /版本错位|out_of_scope|超范围/.test(l)),
-          onWorkerEvent: undefined,
         },
         deps.escalate,
       );
-      log(`[agent:${a.name}] verify 判官结论 = ${verify.verdict}${verify.escalated ? "(⚠ 升级)" : ""}  票数=${JSON.stringify(verify.tally)}`);
+      log(`verify 判官结论 = ${verify.verdict}${verify.escalated ? "(⚠ 升级)" : ""}  票数=${JSON.stringify(verify.tally)}`);
     } else {
-      log(`[agent:${a.name}] verify:本轮无失败用例(测试干净 → 无回归)`);
+      log("verify:本轮无失败用例(测试干净 → 无回归)");
     }
   }
+  return { verify, guardsBlocked };
+}
 
-  return { signal, verify, guardsBlocked };
+/** 跑一个完整 tick:探新构建 → do(guard + verify panel)。 */
+export async function runAgent(a: AgentDef, deps: RunDeps): Promise<TickResult> {
+  const log = deps.onLog ?? (() => {});
+  const sig = await detectSignal(a, deps, log);
+  log(`[${a.name}] 新构建信号 = ${sig?.buildId ?? "(无)"}`);
+  if (!sig) return { signal: null, buildId: null, guardsBlocked: [] };
+  const r = await runDo(a, sig.buildId, deps, (m) => log(`[${a.name}] ${m}`));
+  return { signal: sig.raw, buildId: sig.buildId, ...r };
+}
+
+/** 常驻哨兵:loop 定时探新构建 → 去重(vs 持久化 last-seen)→ 新构建才跑 do。 */
+export async function runSentinel(
+  a: AgentDef,
+  deps: RunDeps,
+  opts: { intervalMs: number; maxTicks?: number; statePath?: string },
+): Promise<{ ticks: number; lastSeen: string | null; reason: string }> {
+  const r = await scheduleLoop<{ lastSeen: string | null }>({
+    name: a.name,
+    state: { lastSeen: null },
+    statePath: opts.statePath,
+    intervalMs: opts.intervalMs,
+    maxTicks: opts.maxTicks,
+    onLog: deps.onLog,
+    tick: async ({ tick, state, log }) => {
+      const sig = await detectSignal(a, deps, () => {}); // 探测安静(命中缓存=便宜)
+      if (!sig) {
+        log(`  tick ${tick}:没探到构建`);
+        return;
+      }
+      if (sig.buildId === state.lastSeen) {
+        log(`  tick ${tick}:无新构建(${sig.buildId})→ 跳过`);
+        return;
+      }
+      log(`  tick ${tick}:🔔 新构建 ${sig.buildId}(上次=${state.lastSeen ?? "无"})→ 触发守望`);
+      await runDo(a, sig.buildId, deps, (m) => log(`    ${m}`)); // ← 串起 guard + verify panel(归因)
+      state.lastSeen = sig.buildId;
+    },
+  });
+  return { ticks: r.ticks, lastSeen: r.state.lastSeen, reason: r.reason };
 }
