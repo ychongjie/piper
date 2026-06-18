@@ -87,10 +87,14 @@ export {
 // agent 节点模型 + TS builder + 运行时
 export {
   type AgentDef,
+  type BackendDef,
   type GoalDef,
+  type GuardDef,
   type GuardRule,
   type PanelDef,
   type RunDeps,
+  type SignalKind,
+  type StepDef,
   type TickResult,
   type VerifyDef,
   agent,
@@ -101,5 +105,6 @@ export {
   runAgent,
   runSentinel,
 } from "./agent.ts";
-// YAML loader(与 TS builder 等价)
+// YAML loader(与 TS builder 等价)+ 封闭词汇 schema
 export { loadAgentYaml } from "./yaml.ts";
+export { AgentSchemaError, AgentYamlSchema, validateAgentYaml } from "./agent-schema.ts";
