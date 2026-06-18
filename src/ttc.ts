@@ -9,7 +9,7 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { type WorkerEvent, subscribeWorkerEvents } from "./goal.ts";
-import { getBackend } from "./session.ts";
+import { backendForModel } from "./session.ts";
 
 export interface StructuredWorkerOpts {
   prompt: string;
@@ -34,7 +34,7 @@ export async function structuredWorker<T>(o: StructuredWorkerOpts): Promise<T | 
     },
   });
   const allTools = [...o.tools, capture];
-  const { session } = await getBackend()({
+  const { session } = await backendForModel()({
     tools: allTools.map((t) => t.name), // 只给验证器 + capture,不给内置工具
     customTools: allTools,
   });

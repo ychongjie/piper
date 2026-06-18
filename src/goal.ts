@@ -5,7 +5,7 @@
 // worker 派发(dispatch)可注入:默认用当前后端(便宜模型),测试注入 mock 不花钱。
 
 import type { Check } from "./check.ts";
-import { getBackend } from "./session.ts";
+import { backendForModel } from "./session.ts";
 
 export type GoalStatus = "already-done" | "success" | "exhausted";
 
@@ -51,7 +51,7 @@ export interface GoalOptions {
   maxSteps?: number; // 预算,默认 5
   cwd?: string; // worker 工作目录
   tools?: string[]; // worker 可用 pi 工具
-  dispatch?: Dispatch; // 可注入 worker;默认用注入的后端(getBackend)起 pi 会话
+  dispatch?: Dispatch; // 可注入 worker;默认按配置默认模型(backendForModel)起 pi 会话
   onLog?: (msg: string) => void;
   onEvent?: (e: GoalEvent) => void; // goal 外环事件(观测层用)
   onWorkerEvent?: (e: WorkerEvent) => void; // worker 工作过程事件(透传给 dispatch)
@@ -93,7 +93,7 @@ export function subscribeWorkerEvents(session: any, emit: (e: WorkerEvent) => vo
 
 /** 默认 worker:用当前注入的后端起一个 pi 会话干活,并把 pi 事件流映射成 WorkerEvent。 */
 export const piDispatch: Dispatch = async ({ prompt, cwd, tools, onWorkerEvent }) => {
-  const { session } = await getBackend()({ cwd, tools: tools ?? DEFAULT_TOOLS });
+  const { session } = await backendForModel()({ cwd, tools: tools ?? DEFAULT_TOOLS });
   let text = "";
   subscribeWorkerEvents(session, (e) => {
     if (e.type === "text_delta") text += e.delta;

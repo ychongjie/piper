@@ -12,6 +12,7 @@ const Step = Type.Object(
     id: Type.String(),
     nl: Type.String(),
     using: Type.Optional(Type.Array(Type.String())),
+    model: Type.Optional(Type.String()), // 标准模型名(查 piper 配置;覆盖 do.model)
     cwd: Type.Optional(Type.String()),
     danger: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     self_contained: Type.Optional(Type.Boolean()),
@@ -40,6 +41,7 @@ const Do = Type.Object(
   {
     goal: Type.String(),
     using: Type.Optional(Type.Array(Type.String())),
+    model: Type.Optional(Type.String()), // 默认标准模型名(触发器 + 各 step 缺省用它)
     steps: Type.Optional(Type.Array(Step)), // 声明式多步;缺省=把 goal 当单步
     verify: Verify,
   },
@@ -52,18 +54,6 @@ const Guard = Type.Object(
     owns: Type.Optional(Type.String()),
     budget: Type.Optional(Type.Integer({ minimum: 0 })),
     rules: Type.Optional(Type.Array(Type.Object({ when: Type.String(), require: Type.String() }, closed))),
-  },
-  closed,
-);
-
-// 便宜模型后端(声明式部署配置)。key 走环境变量名,不写明文。
-const Backend = Type.Object(
-  {
-    provider: Type.String(),
-    model: Type.String(),
-    base_url: Type.String(),
-    api: Type.Union([Type.Literal("anthropic-messages"), Type.Literal("openai-responses"), Type.Literal("openai-completions")]),
-    api_key_env: Type.String(),
   },
   closed,
 );
@@ -85,7 +75,6 @@ export const AgentYamlSchema = Type.Object(
     distilled_from: Type.Optional(
       Type.Object({ sessions: Type.Optional(Type.Array(Type.String())), skills: Type.Optional(Type.Array(Type.String())) }, closed),
     ),
-    backend: Type.Optional(Backend),
     forbid_runtime_deps: Type.Optional(Type.Array(Type.String())), // 自包含禁则(正则字符串)
     loop: Loop,
     guard: Type.Optional(Guard),

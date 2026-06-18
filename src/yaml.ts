@@ -1,7 +1,7 @@
 // YAML loader:严格校验(封闭词汇)后,编译成 AgentDef(和 TS builder 同一窄腰)。
 // 未知键/错类型 → AgentSchemaError(在 validateAgentYaml 里)。
 import { parse } from "yaml";
-import type { AgentDef, BackendDef, GoalDef, GuardDef, SignalKind, StepDef, VerifyDef } from "./agent.ts";
+import type { AgentDef, GoalDef, GuardDef, SignalKind, StepDef, VerifyDef } from "./agent.ts";
 import { validateAgentYaml } from "./agent-schema.ts";
 
 export function loadAgentYaml(text: string): AgentDef {
@@ -12,7 +12,6 @@ export function loadAgentYaml(text: string): AgentDef {
   return {
     name: d.agent,
     distilledFrom: d.distilled_from ? { sessions: d.distilled_from.sessions, skills: d.distilled_from.skills } : undefined,
-    backend: parseBackend(d.backend),
     forbidRuntimeDeps: d.forbid_runtime_deps,
     loop: {
       on: String(d.loop.on),
@@ -28,6 +27,7 @@ function parseDo(doNode: any): GoalDef {
   return {
     nl: String(doNode.goal),
     using: doNode.using,
+    model: doNode.model ? String(doNode.model) : undefined,
     steps: Array.isArray(doNode.steps) ? doNode.steps.map(parseStep) : undefined,
     verify: parseVerify(doNode.verify),
   };
@@ -38,6 +38,7 @@ function parseStep(s: any): StepDef {
     id: String(s.id),
     nl: String(s.nl),
     using: s.using,
+    model: s.model ? String(s.model) : undefined,
     cwd: s.cwd ? String(s.cwd) : undefined,
     danger: s.danger === undefined ? null : s.danger,
     selfContained: s.self_contained,
@@ -60,9 +61,4 @@ function parseGuard(g: any): GuardDef | undefined {
     budget: g.budget,
     rules: Array.isArray(g.rules) ? g.rules.map((r: any) => ({ when: String(r.when), require: String(r.require) })) : undefined,
   };
-}
-
-function parseBackend(b: any): BackendDef | undefined {
-  if (!b) return undefined;
-  return { provider: String(b.provider), model: String(b.model), baseUrl: String(b.base_url), api: String(b.api), apiKeyEnv: String(b.api_key_env) };
 }

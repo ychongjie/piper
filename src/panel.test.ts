@@ -2,12 +2,12 @@
 import { expect, test } from "bun:test";
 import { denyByDefault } from "./escalate.ts";
 import { panel } from "./panel.ts";
-import { setBackend } from "./session.ts";
+import { setBackendOverride } from "./session.ts";
 
 // 假后端:structuredWorker 把 capture 工具追加在 customTools 末尾;prompt 时直接调它喂预设 payload。
 function mockBackend(payloads: any[]) {
   let i = 0;
-  setBackend(async (opts: any) => {
+  setBackendOverride(async (opts: any) => {
     const tools = opts?.customTools ?? [];
     const capture = tools[tools.length - 1];
     return {

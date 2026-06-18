@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test";
 import { type CrystalCache, containmentViolations, crystallize } from "./crystallize.ts";
 import { denyByDefault } from "./escalate.ts";
-import { setBackend } from "./session.ts";
+import { setBackendOverride } from "./session.ts";
 
 function memCache(): CrystalCache {
   const m = new Map<string, { script: string; version: number; nl: string }>();
@@ -12,7 +12,7 @@ function memCache(): CrystalCache {
 // 假后端:writeScript 的 submit_script 工具在 customTools 末尾;prompt 时直接喂预设脚本。
 function mockScript(scripts: string[]) {
   let i = 0;
-  setBackend(async (opts: any) => {
+  setBackendOverride(async (opts: any) => {
     const tools = opts?.customTools ?? [];
     const submit = tools[tools.length - 1];
     return {

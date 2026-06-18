@@ -7,10 +7,12 @@ export {
   type CheapModelSpec,
   type SessionFactory,
   type SessionOpts,
+  backendForModel,
   createPiSession,
-  getBackend,
-  setBackend,
+  setBackendOverride,
 } from "./session.ts";
+// 部署配置:网关 + 标准模型名映射(数据,不是代码)
+export { type GatewayConfig, type PiperConfig, loadPiperConfig, resolveModel, setPiperConfig } from "./config.ts";
 
 // 客观验收
 export { type Check, type CheckResult, shellCheck, fnCheck } from "./check.ts";
@@ -87,7 +89,6 @@ export {
 // agent 节点模型 + TS builder + 运行时
 export {
   type AgentDef,
-  type BackendDef,
   type GoalDef,
   type GuardDef,
   type GuardRule,

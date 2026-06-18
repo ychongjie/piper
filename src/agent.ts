@@ -16,7 +16,6 @@ export type SignalKind = "commit-sha" | "package-version" | "nonempty";
 export interface AgentDef {
   name: string;
   distilledFrom?: { sessions?: string[]; skills?: string[] };
-  backend?: BackendDef;
   forbidRuntimeDeps?: string[]; // 自包含禁则(正则字符串)
   loop: { on: string; signal?: SignalKind; every?: string; do: GoalDef };
   guard?: GuardDef;
@@ -24,6 +23,7 @@ export interface AgentDef {
 export interface GoalDef {
   nl: string;
   using?: string[]; // skills
+  model?: string; // 默认标准模型名(触发器 + 各 step 缺省用它;step 可覆盖)
   steps?: StepDef[]; // 声明式多步;缺省=goal 当单步声明
   verify: VerifyDef;
 }
@@ -31,6 +31,7 @@ export interface StepDef {
   id: string;
   nl: string;
   using?: string[];
+  model?: string; // 本步用的标准模型名(覆盖 do.model);查 piper 配置解析
   cwd?: string;
   danger?: string | null;
   selfContained?: boolean;
@@ -52,13 +53,6 @@ export interface GuardDef {
 export interface GuardRule {
   when: string;
   require: string;
-}
-export interface BackendDef {
-  provider: string;
-  model: string;
-  baseUrl: string;
-  api: string;
-  apiKeyEnv: string;
 }
 
 // ---- TS builder(和 YAML 等价)----
@@ -139,6 +133,7 @@ const stepsToActions = (a: AgentDef): CrystallizableAction[] =>
     id: `${a.name}__${s.id}`,
     nl: s.nl,
     skills: s.using ?? a.loop.do.using,
+    model: s.model ?? a.loop.do.model, // step 覆盖 → do 默认 → 配置 default
     cwd: expandHome(s.cwd),
     danger: s.danger ?? null,
     selfContained: s.selfContained,
@@ -168,6 +163,7 @@ async function detectSignal(a: AgentDef, deps: RunDeps, gate: EscalationHandler,
     id: `${a.name}__trigger`,
     nl: a.loop.on,
     skills: a.loop.do.using,
+    model: a.loop.do.model, // 触发器用 do 默认模型
     cwd: expandHome(deps.cwd),
     danger: null,
     selfContained: true, // 只读触发器强制自包含(产物可入仓钉死)

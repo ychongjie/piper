@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { EscalationHandler } from "./escalate.ts";
-import { getBackend } from "./session.ts";
+import { backendForModel } from "./session.ts";
 import { sh } from "./sh.ts";
 
 export interface CrystallizableAction {
@@ -21,6 +21,7 @@ export interface CrystallizableAction {
   cwd?: string;
   danger?: string | null; // 非空=危险写,固化/运行前过授权闸
   selfContained?: boolean; // 覆盖 agent 级 policy:本步产物是否强制自包含(如重活步骤暂用仓库脚本→false)
+  model?: string; // 标准模型名(查 piper 配置);缺省=配置 default_model
 }
 
 export interface CrystallizeResult {
@@ -110,6 +111,7 @@ async function writeScript(o: {
   skills?: string[];
   cwd?: string;
   selfContained?: boolean;
+  model?: string;
   log?: (m: string) => void;
   prior?: { script: string; error: string };
 }): Promise<string | null> {
@@ -128,7 +130,7 @@ async function writeScript(o: {
     },
   });
 
-  const { session } = await getBackend()({
+  const { session } = await backendForModel(o.model)({
     cwd: o.cwd,
     tools: ["read", "bash", "submit_script"],
     customTools: [submit],
@@ -208,7 +210,7 @@ export async function crystallize(
     failOut = out.output;
   } else {
     log(`[crystallize:${action.id}] 首次编译……`);
-    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained, log });
+    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained, model: action.model, log });
     if (!script) throw new Error(`crystallize ${action.id} 编译失败:没产出脚本`);
     const cv = containMsg(script);
     if (cv) {
@@ -237,7 +239,7 @@ export async function crystallize(
       }
     }
     log(`[crystallize:${action.id}] 自修第 ${i}/${max} 轮……`);
-    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained, log, prior: { script: prev?.script ?? "", error: failOut } });
+    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained, model: action.model, log, prior: { script: prev?.script ?? "", error: failOut } });
     if (!script) break;
     const cv = containMsg(script);
     if (cv) {

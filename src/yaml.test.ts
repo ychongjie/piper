@@ -13,6 +13,7 @@ loop:
   do:
     goal: 跑测
     using: [sk1]
+    model: deepseek-v4-pro
     steps:
       - id: reconcile
         nl: 确保环境
@@ -21,6 +22,7 @@ loop:
         verify: PLATFORM_ENV_ID=\\d+
       - id: run-test
         nl: 跑 api-test
+        model: fast-cheap
     verify:
       panel:
         n: 3
@@ -39,9 +41,11 @@ test("解析完整 agent(loop/signal/steps/panel/guard/溯源)", () => {
   expect(a.distilledFrom?.sessions).toEqual(["s1", "s2"]);
   expect(a.loop.signal).toBe("commit-sha");
   expect(a.loop.do.nl).toBe("跑测");
+  expect(a.loop.do.model).toBe("deepseek-v4-pro"); // do 默认模型
   expect(a.loop.do.steps?.length).toBe(2);
   expect(a.loop.do.steps?.[0]).toMatchObject({ id: "reconcile", danger: "建本 agent 专用环境", selfContained: false, verify: "PLATFORM_ENV_ID=\\d+" });
   expect(a.loop.do.steps?.[1].danger).toBe(null); // 缺省 danger = null
+  expect(a.loop.do.steps?.[1].model).toBe("fast-cheap"); // step 覆盖模型
   const v = a.loop.do.verify as any;
   expect(v.panel.n).toBe(3);
   expect(v.panel.escalateIf).toBe("分歧");

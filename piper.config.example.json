@@ -1,0 +1,15 @@
+{
+  "_doc": "piper 部署配置示例。拷到 ~/.piper/config.json(或设 $PIPER_CONFIG)。无密钥:key 走环境变量名。",
+  "default_model": "deepseek-v4-pro",
+  "gateways": {
+    "baizhi": {
+      "base_url": "https://ai-api-gateway.app.baizhi.cloud/api/anthropic",
+      "api": "anthropic-messages",
+      "api_key_env": "BAIZHI_API_KEY",
+      "reasoning": true,
+      "models": {
+        "deepseek-v4-pro": "vip/deepseek-v4-pro"
+      }
+    }
+  }
+}

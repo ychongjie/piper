@@ -1,6 +1,6 @@
 // 便宜模型会话:通用机制(进程内注册自定义 provider + 起 pi 会话)+ 可注入的"当前后端"。
-// 引擎只认这个抽象;具体用哪个网关/模型(baizhi 等)由调用方(piper-agents)通过 setBackend 注入。
-// 形如旧 Racket 的 current-agent:厚层不绑死后端。
+// 具体用哪个网关/模型由 piper 配置文件(~/.piper/config.json)定;按【标准模型名】解析(见 config.ts)。
+// 引擎代码零耦合:不知道有 baizhi,只认"标准名 → 规格"。pi 固定不抽象框架。
 
 import {
   AuthStorage,
@@ -58,16 +58,19 @@ export async function createPiSession(spec: CheapModelSpec, opts: SessionOpts = 
   });
 }
 
-// ---- 可注入的"当前后端" ----
-let _backend: SessionFactory | null = null;
+// ---- 按【标准模型名】解析后端(查 piper 配置)----
+import { resolveModel } from "./config.ts"; // 仅运行时;config.ts 对 session 是 type-only 引用,无循环
 
-/** 注入便宜模型后端(piper-agents 启动时调一次,如 setBackend(createBaizhiSession))。 */
-export function setBackend(f: SessionFactory): void {
-  _backend = f;
+let _override: SessionFactory | null = null;
+
+/** 测试用:注入假后端,绕过配置文件。 */
+export function setBackendOverride(f: SessionFactory | null): void {
+  _override = f;
 }
 
-/** 取当前后端(goal/ttc 派 worker 用)。没注入就报错——引擎不替你决定用哪个模型。 */
-export function getBackend(): SessionFactory {
-  if (!_backend) throw new Error("未注入后端:先调用 setBackend(...)(如 piper-agents 的 createBaizhiSession)");
-  return _backend;
+/** 按标准模型名取后端工厂:查 piper 配置 → 网关+真实模型 id → 起 pi 会话。缺省用 default_model。 */
+export function backendForModel(model?: string): SessionFactory {
+  if (_override) return _override;
+  const spec = resolveModel(model);
+  return (opts) => createPiSession(spec, opts);
 }
