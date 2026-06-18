@@ -68,12 +68,49 @@ export function containmentViolations(script: string, forbid: readonly RegExp[] 
   return out;
 }
 
+const brief = (s: string, n = 200): string => {
+  const one = String(s ?? "").replace(/\s+/g, " ").trim();
+  return one.length <= n ? one : `${one.slice(0, n)}…`;
+};
+// 从 pi 工具结果 / 消息里抽文本(形状不一,防御性取 content[].text)。
+const textOf = (x: any): string => {
+  if (!x) return "";
+  if (typeof x === "string") return x;
+  const c = x.content ?? x.message?.content;
+  if (Array.isArray(c)) return c.map((p: any) => p?.text ?? "").join(" ");
+  return "";
+};
+
+// 订阅 pi 会话事件 → 把便宜模型的实地试(bash/read/提交 + 输出 + 文本)流进日志。
+function observeSession(session: any, log: (m: string) => void): () => void {
+  if (typeof session?.subscribe !== "function") return () => {};
+  return session.subscribe((ev: any) => {
+    try {
+      if (ev.type === "tool_execution_start") {
+        const a = ev.args ?? {};
+        const d =
+          ev.toolName === "bash" ? `: ${brief(String(a.command ?? ""), 220)}` :
+          ev.toolName === "read" ? `: ${a.path ?? a.file ?? ""}` :
+          ev.toolName === "submit_script" ? " (提交最终脚本)" : "";
+        log(`    ⎯ ${ev.toolName}${d}`);
+      } else if (ev.type === "tool_execution_end") {
+        const t = brief(textOf(ev.result), 200);
+        log(`    ⎿ ${ev.isError ? "✗" : "✓"}${t ? " " + t : ""}`);
+      } else if (ev.type === "message_end") {
+        const t = brief(textOf(ev.message), 220);
+        if (t) log(`    · ${t}`);
+      }
+    } catch {}
+  });
+}
+
 // 让 agent 读 skill + 用 bash 实地试,最后提交一个脚本。
 async function writeScript(o: {
   nl: string;
   skills?: string[];
   cwd?: string;
   selfContained?: boolean;
+  log?: (m: string) => void;
   prior?: { script: string; error: string };
 }): Promise<string | null> {
   let captured: string | null = null;
@@ -96,6 +133,7 @@ async function writeScript(o: {
     tools: ["read", "bash", "submit_script"],
     customTools: [submit],
   });
+  const unobserve = o.log ? observeSession(session, o.log) : () => {};
 
   const prompt = [
     o.prior ? "下面这个脚本坏了,请诊断并修好它。" : "请实现下面这个意图,产出一个【可复用的 shell 脚本】。",
@@ -115,7 +153,11 @@ async function writeScript(o: {
     .filter(Boolean)
     .join("\n");
 
-  await session.prompt(prompt);
+  try {
+    await session.prompt(prompt);
+  } finally {
+    unobserve();
+  }
   return captured;
 }
 
@@ -166,7 +208,7 @@ export async function crystallize(
     failOut = out.output;
   } else {
     log(`[crystallize:${action.id}] 首次编译……`);
-    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained });
+    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained, log });
     if (!script) throw new Error(`crystallize ${action.id} 编译失败:没产出脚本`);
     const cv = containMsg(script);
     if (cv) {
@@ -195,7 +237,7 @@ export async function crystallize(
       }
     }
     log(`[crystallize:${action.id}] 自修第 ${i}/${max} 轮……`);
-    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained, prior: { script: prev?.script ?? "", error: failOut } });
+    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained, log, prior: { script: prev?.script ?? "", error: failOut } });
     if (!script) break;
     const cv = containMsg(script);
     if (cv) {
