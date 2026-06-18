@@ -46,7 +46,8 @@ export interface RunDeps {
   resolveGround: (groundNl: string[]) => ReturnType<typeof defineTool>[]; // panel ground NL → 真实取证工具
   cwd?: string;
   caseForVerify?: () => Promise<{ judgeContext: string } | null>; // 待判失败用例(真实里来自跑测)
-  buildIdOf?: (signal: string) => string; // 从 signal 抽稳定 build id(默认解析 ref_name/版本号)
+  buildIdOf?: (signal: string) => string; // 从 signal 抽稳定 build id(默认解析 ref_name/sha/版本号)
+  triggerVerify?: (out: string) => boolean; // 触发器输出的验收契约(项目侧定;如 commit sha / 包版本)
   onLog?: (m: string) => void;
 }
 
@@ -75,8 +76,8 @@ async function detectSignal(a: AgentDef, deps: RunDeps, log: (m: string) => void
     skills: a.loop.do.using,
     cwd: deps.cwd,
     danger: null,
-    // 真验收:输出必须含合理的构建标识(版本号样式),防弱验收缓存垃圾。
-    verify: (out) => /\b\d{2}\.\d{2}\.\d{2,}/.test(out),
+    // 真验收契约由项目侧给(如 commit sha / 包版本);默认仅"非空"。强契约防弱验收缓存垃圾。
+    verify: deps.triggerVerify ?? ((out) => out.trim().length > 0),
   };
   try {
     const t = await crystallize(trigger, { cache: deps.cache, escalate: deps.escalate, maxRepairs: 1, onLog: log });

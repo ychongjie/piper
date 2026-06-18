@@ -5,8 +5,8 @@ import { denyByDefault } from "./escalate.ts";
 import { setBackend } from "./session.ts";
 
 function memCache(): CrystalCache {
-  const m = new Map<string, { script: string; version: number }>();
-  return { load: (id) => m.get(id) ?? null, save: (id, script, version) => m.set(id, { script, version }) };
+  const m = new Map<string, { script: string; version: number; nl: string }>();
+  return { load: (id) => m.get(id) ?? null, save: (id, script, version, nl) => m.set(id, { script, version, nl }) };
 }
 
 // 假后端:writeScript 的 submit_script 工具在 customTools 末尾;prompt 时直接喂预设脚本。
@@ -30,7 +30,7 @@ const esc = denyByDefault();
 
 test("缓存命中 → 直接跑缓存脚本", async () => {
   const cache = memCache();
-  cache.save("a", "echo hi", 1, "nl");
+  cache.save("a", "echo hi", 1, "n");
   const r = await crystallize({ id: "a", nl: "n", verify: (o) => o.includes("hi") }, { cache, escalate: esc });
   expect(r.mode).toBe("cached");
   expect(r.signal).toBe("hi");
@@ -47,7 +47,7 @@ test("首次编译 → 独立验收 → 缓存", async () => {
 test("缓存脚本没过验收 → 自修 → 重新缓存", async () => {
   mockScript(["echo good"]);
   const cache = memCache();
-  cache.save("c", "echo bad", 1, "nl");
+  cache.save("c", "echo bad", 1, "n");
   const r = await crystallize({ id: "c", nl: "n", verify: (o) => o.includes("good") }, { cache, escalate: esc });
   expect(r.mode).toBe("repaired");
   expect(cache.load("c")?.script).toBe("echo good");
@@ -56,7 +56,7 @@ test("缓存脚本没过验收 → 自修 → 重新缓存", async () => {
 
 test("危险写授权被拒 → 抛错(不执行)", async () => {
   const cache = memCache();
-  cache.save("d", "echo x", 1, "nl");
+  cache.save("d", "echo x", 1, "n");
   await expect(
     crystallize({ id: "d", nl: "n", danger: "删测试环境", verify: () => true }, { cache, escalate: esc }),
   ).rejects.toThrow(/授权被拒/);

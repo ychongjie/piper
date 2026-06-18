@@ -29,7 +29,7 @@ export interface CrystallizeResult {
 }
 
 export interface CrystalCache {
-  load(id: string): { script: string; version: number } | null;
+  load(id: string): { script: string; version: number; nl: string } | null;
   save(id: string, script: string, version: number, nl: string): void;
 }
 
@@ -40,7 +40,7 @@ export function fileCache(dir: string): CrystalCache {
       if (!existsSync(f)) return null;
       try {
         const j = JSON.parse(readFileSync(f, "utf8"));
-        return { script: j.script, version: j.version };
+        return { script: j.script, version: j.version, nl: j.nl ?? "" };
       } catch {
         return null;
       }
@@ -115,7 +115,10 @@ export async function crystallize(
     if (res.decision !== "approve") throw new Error(`crystallize ${action.id} 授权被拒:${action.danger}`);
   }
 
-  const cached = opts.cache.load(action.id);
+  const stored = opts.cache.load(action.id);
+  // NL 改了就重编译(缓存按 id+NL 失效;否则会用旧意图的脚本)。
+  const cached = stored && stored.nl === action.nl ? stored : null;
+  if (stored && !cached) log(`[crystallize:${action.id}] 意图变了 → 弃旧脚本,重新编译`);
   let prev: { script: string; version: number } | null = cached;
   let failOut = "";
 
