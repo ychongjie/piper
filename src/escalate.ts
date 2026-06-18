@@ -77,6 +77,28 @@ export function authorizationGate(opts: {
 }
 
 /**
+ * 自管资源闸:agent 管【自己专用】的资源(如它的专用环境)是本职 —— 预算内自动放行;
+ * 超预算、或碰【别人的】资源 → 走 fallback(升级给人)。这是"全自动 + 专用环境"该有的校准:
+ * 不是所有共享写都问人,而是"自己的 + 在预算内 → 自动;别人的 / 超预算 → 升级"。
+ */
+export function selfManagedGate(opts: {
+  owns: (reason: string) => boolean; // 这次授权请求是不是"动本 agent 自管的资源"
+  budget?: { max: number; used: { n: number } }; // 自管写操作的预算(如一天最多重建 N 次)
+  fallback: EscalationHandler; // 非自管 / 超预算 → 升级
+}): EscalationHandler {
+  return async (e) => {
+    if (e.kind === "authorization" && opts.owns(e.reason)) {
+      if (opts.budget && opts.budget.used.n >= opts.budget.max) {
+        return opts.fallback({ ...e, reason: `超预算(${opts.budget.max} 次):${e.reason}` });
+      }
+      if (opts.budget) opts.budget.used.n += 1;
+      return { decision: "approve", resolvedBy: "default", note: "自管专用资源,预算内自动放行" };
+    }
+    return opts.fallback(e);
+  };
+}
+
+/**
  * 收敛兜底:
  *  - 收敛到普通标签 → 直接用 winner;
  *  - 收敛到 escalateLabels 里的标签(如 out_of_scope,本就不可自动处理)→ 升级通知,但保留模型判断;

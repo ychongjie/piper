@@ -48,14 +48,27 @@ export interface RunDeps {
   caseForVerify?: () => Promise<{ judgeContext: string } | null>; // 待判失败用例(真实里来自跑测)
   buildIdOf?: (signal: string) => string; // 从 signal 抽稳定 build id(默认解析 ref_name/sha/版本号)
   triggerVerify?: (out: string) => boolean; // 触发器输出的验收契约(项目侧定;如 commit sha / 包版本)
+  // 自包含 policy:要求所有固化产物运行时不依赖 skill/外部仓库脚本(编译期内联),产物可入仓钉死。
+  selfContained?: boolean;
+  forbidRuntimeDeps?: readonly RegExp[]; // 项目侧额外禁止的运行时依赖(如外部仓库脚本路径)
+  // do 的步骤分解(项目侧给:reconcile-env / build / deploy / run-test),各自可固化、按 danger 过授权闸。
+  // 不给则 do 仅声明(旧行为,gated)。最后一步的输出当 verify 的判官上下文(=真实测试结果)。
+  doSteps?: () => CrystallizableAction[];
   onLog?: (m: string) => void;
+}
+
+export interface StepOutcome {
+  id: string;
+  mode: string;
+  ok: boolean;
+  note: string;
 }
 
 export interface TickResult {
   signal: string | null;
   buildId: string | null;
   verify?: PanelResult;
-  guardsBlocked: string[];
+  steps: StepOutcome[];
 }
 
 const DEFAULT_BUILD_ID = (signal: string): string => {
@@ -80,7 +93,7 @@ async function detectSignal(a: AgentDef, deps: RunDeps, log: (m: string) => void
     verify: deps.triggerVerify ?? ((out) => out.trim().length > 0),
   };
   try {
-    const t = await crystallize(trigger, { cache: deps.cache, escalate: deps.escalate, maxRepairs: 1, onLog: log });
+    const t = await crystallize(trigger, { cache: deps.cache, escalate: deps.escalate, maxRepairs: 1, onLog: log, selfContained: deps.selfContained, forbidRuntimeDeps: deps.forbidRuntimeDeps });
     if (!t.signal) return null;
     return { raw: t.signal, buildId: (deps.buildIdOf ?? DEFAULT_BUILD_ID)(t.signal) };
   } catch (e) {
@@ -89,29 +102,47 @@ async function detectSignal(a: AgentDef, deps: RunDeps, log: (m: string) => void
   }
 }
 
-// ② do:更新环境+跑测(动共享资源过 guard)→ verify(失败用例用 panel 独立判官)。
-async function runDo(a: AgentDef, _buildId: string, deps: RunDeps, log: (m: string) => void): Promise<{ verify?: PanelResult; guardsBlocked: string[] }> {
-  const guardsBlocked: string[] = [];
-  for (const g of a.guard ?? []) {
-    const res = await deps.escalate({ kind: "authorization", reason: `${g.when} → ${g.require}`, options: ["approve", "deny"] });
-    if (res.decision !== "approve") {
-      guardsBlocked.push(g.when);
-      log(`授权闸拦下:${g.when}(无人值守→${res.decision})`);
-    }
-  }
-  log(`goal:${a.loop.do.nl} —— 用 ${(a.loop.do.using ?? []).join("/")} skill(provision/teardown 受 guard)`);
+// ② do:真跑步骤(reconcile→build→deploy→run-test,各按 danger 过自管闸)→ verify(用真实测试输出)。
+async function runDo(a: AgentDef, _buildId: string, deps: RunDeps, log: (m: string) => void): Promise<{ verify?: PanelResult; steps: StepOutcome[] }> {
+  const steps: StepOutcome[] = [];
+  let testOutput: string | undefined;
 
+  const doSteps = deps.doSteps ? deps.doSteps() : [];
+  if (doSteps.length) {
+    for (const step of doSteps) {
+      try {
+        const r = await crystallize(step, { cache: deps.cache, escalate: deps.escalate, onLog: log, selfContained: deps.selfContained, forbidRuntimeDeps: deps.forbidRuntimeDeps });
+        steps.push({ id: step.id, mode: r.mode, ok: true, note: r.mode });
+        log(`步骤 ${step.id}:${r.mode} ✓`);
+        testOutput = r.output; // 最后一步(run-test)的输出 = 真实测试结果
+      } catch (e) {
+        const note = (e as Error).message;
+        steps.push({ id: step.id, mode: "failed", ok: false, note });
+        log(`步骤 ${step.id} 中止:${note}`);
+        return { steps }; // 一步挂/被拒(如建别人的环境被升级deny)→ 停 do
+      }
+    }
+  } else {
+    // 旧行为:do 未接步骤,只声明 + 走 guard 声明(gated)。
+    for (const g of a.guard ?? []) {
+      const res = await deps.escalate({ kind: "authorization", reason: `${g.when} → ${g.require}`, options: ["approve", "deny"] });
+      if (res.decision !== "approve") log(`授权闸拦下:${g.when}(→${res.decision})`);
+    }
+    log(`goal:${a.loop.do.nl} —— do 未接步骤(gated)`);
+  }
+
+  // verify:有真实测试输出就用它当判官上下文;否则用注入的(历史)用例。
   let verify: PanelResult | undefined;
   const vd = a.loop.do.verify;
   if ("panel" in vd) {
-    const c = deps.caseForVerify ? await deps.caseForVerify() : null;
-    if (c) {
+    const ctx = testOutput ?? (deps.caseForVerify ? (await deps.caseForVerify())?.judgeContext : undefined);
+    if (ctx) {
       const p = vd.panel;
       log(`verify:起 ${p.n} 个独立判官……`);
       verify = await panel(
         {
           n: p.n,
-          judge: `${p.judge}\n\n待判情况:\n${c.judgeContext}`,
+          judge: `${p.judge}\n\n待判情况:\n${ctx}`,
           ground: deps.resolveGround(p.ground),
           labels: p.labels,
           escalateLabels: p.labels?.filter((l) => /版本错位|out_of_scope|超范围/.test(l)),
@@ -120,18 +151,18 @@ async function runDo(a: AgentDef, _buildId: string, deps: RunDeps, log: (m: stri
       );
       log(`verify 判官结论 = ${verify.verdict}${verify.escalated ? "(⚠ 升级)" : ""}  票数=${JSON.stringify(verify.tally)}`);
     } else {
-      log("verify:本轮无失败用例(测试干净 → 无回归)");
+      log("verify:无失败用例 / 无测试输出(测试干净 → 无回归)");
     }
   }
-  return { verify, guardsBlocked };
+  return { verify, steps };
 }
 
-/** 跑一个完整 tick:探新构建 → do(guard + verify panel)。 */
+/** 跑一个完整 tick:探新构建 → do(真跑步骤 + verify panel)。 */
 export async function runAgent(a: AgentDef, deps: RunDeps): Promise<TickResult> {
   const log = deps.onLog ?? (() => {});
   const sig = await detectSignal(a, deps, log);
   log(`[${a.name}] 新构建信号 = ${sig?.buildId ?? "(无)"}`);
-  if (!sig) return { signal: null, buildId: null, guardsBlocked: [] };
+  if (!sig) return { signal: null, buildId: null, steps: [] };
   const r = await runDo(a, sig.buildId, deps, (m) => log(`[${a.name}] ${m}`));
   return { signal: sig.raw, buildId: sig.buildId, ...r };
 }

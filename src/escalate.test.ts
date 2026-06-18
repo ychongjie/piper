@@ -1,6 +1,6 @@
 // escalate 单测(授权闸 + 收敛兜底),mock handler,不打网络。跑:bun test
 import { expect, test } from "bun:test";
-import { authorizationGate, denyByDefault, resolveOrEscalate } from "./escalate.ts";
+import { authorizationGate, denyByDefault, resolveOrEscalate, selfManagedGate } from "./escalate.ts";
 import type { BestOfNResult } from "./ttc.ts";
 
 const approve = async () => ({ decision: "approve", resolvedBy: "human" as const });
@@ -70,6 +70,24 @@ test("收敛到普通标签 + 配了 escalateLabels → 不升级", async () => 
   });
   expect(r.escalated).toBe(false);
   expect(r.label).toBe("test_bug");
+});
+
+test("selfManagedGate:自管资源 + 预算内 → 自动放行", async () => {
+  const gate = selfManagedGate({ owns: (r) => /本 agent 专用/.test(r), budget: { max: 2, used: { n: 0 } }, fallback: deny });
+  const r = await gate({ kind: "authorization", reason: "重建本 agent 专用环境" });
+  expect(r.decision).toBe("approve");
+});
+
+test("selfManagedGate:碰别人的资源 → 走 fallback(升级)", async () => {
+  const gate = selfManagedGate({ owns: (r) => /本 agent 专用/.test(r), fallback: deny });
+  const r = await gate({ kind: "authorization", reason: "删除某共享环境" });
+  expect(r.decision).toBe("deny");
+});
+
+test("selfManagedGate:自管但超预算 → 走 fallback", async () => {
+  const gate = selfManagedGate({ owns: () => true, budget: { max: 1, used: { n: 1 } }, fallback: deny });
+  const r = await gate({ kind: "authorization", reason: "重建本 agent 专用环境" });
+  expect(r.decision).toBe("deny"); // 超预算 → fallback
 });
 
 test("denyByDefault:授权→deny,判断类→uncertain", async () => {

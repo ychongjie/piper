@@ -1,6 +1,6 @@
 // crystallize 单测:mock 编译(假后端喂脚本)+ 本地 echo 当"跑脚本",不打网络。跑:bun test
 import { expect, test } from "bun:test";
-import { type CrystalCache, crystallize } from "./crystallize.ts";
+import { type CrystalCache, containmentViolations, crystallize } from "./crystallize.ts";
 import { denyByDefault } from "./escalate.ts";
 import { setBackend } from "./session.ts";
 
@@ -60,4 +60,43 @@ test("危险写授权被拒 → 抛错(不执行)", async () => {
   await expect(
     crystallize({ id: "d", nl: "n", danger: "删测试环境", verify: () => true }, { cache, escalate: esc }),
   ).rejects.toThrow(/授权被拒/);
+});
+
+// ---- 自包含:静态检查(纯函数)----
+const REPO_SCRIPT = /(?:bash|sh|source)\s+\S*tester\/api-test\/scripts\/[\w-]+\.sh/;
+
+test("自包含检查:read ~/.claude/skills → 违规", () => {
+  const v = containmentViolations("cat ~/.claude/skills/safeline-apitest-env/SKILL.md");
+  expect(v[0]).toMatch(/\.claude\/skills/);
+});
+
+test("自包含检查:shell-out 到外部仓库脚本 → 违规", () => {
+  const v = containmentViolations("bash $HOME/Code/gitlab/safeline-3/tester/api-test/scripts/provision-env.sh", [REPO_SCRIPT]);
+  expect(v[0]).toMatch(/外部仓库脚本/);
+});
+
+test("自包含检查:只用系统工具 + 内联逻辑 → 干净", () => {
+  const s = "set -e\ncd $REPO && go build ./...\ncurl -s http://10.2.39.2/api | jq .\nglab variable get TOKEN";
+  expect(containmentViolations(s, [REPO_SCRIPT]).length).toBe(0);
+});
+
+// ---- 自包含:开关关 → 不拦(旧行为不变)----
+test("selfContained 关:引用 skill 的缓存脚本照样命中", async () => {
+  const cache = memCache();
+  cache.save("e", "cat ~/.claude/skills/foo/SKILL.md; echo ok", 1, "n");
+  const r = await crystallize({ id: "e", nl: "n", verify: (o) => o.includes("ok") }, { cache, escalate: esc });
+  expect(r.mode).toBe("cached"); // 没开 selfContained → 不查
+});
+
+// ---- 自包含:开关开 → 违规脚本被拒、自修产出内联脚本才入缓存 ----
+test("selfContained 开:违规→自修内联→缓存自包含脚本", async () => {
+  // 首版 shell-out 仓库脚本(违规)→ 自修给出内联版(只 echo,自包含)
+  mockScript(["bash $HOME/Code/gitlab/safeline-3/tester/api-test/scripts/provision-env.sh", "echo env_id=piper-watchdog-1 running"]);
+  const cache = memCache();
+  const r = await crystallize(
+    { id: "f", nl: "起本 agent 专用环境", verify: (o) => /env_id|running/.test(o) },
+    { cache, escalate: esc, selfContained: true, forbidRuntimeDeps: [REPO_SCRIPT] },
+  );
+  expect(r.mode).toBe("repaired"); // 第一版被自包含检查拦 → 自修
+  expect(containmentViolations(cache.load("f")!.script, [REPO_SCRIPT]).length).toBe(0); // 入缓存的是自包含版
 });

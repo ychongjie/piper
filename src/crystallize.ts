@@ -55,11 +55,24 @@ export function fileCache(dir: string): CrystalCache {
   };
 }
 
+// ---- 自包含检查:编译产物运行时不得依赖"知识来源"(skill 提示词 / 外部仓库脚本)----
+// 能依赖的只有系统工具(curl/jq/ssh/glab/docker…)+ 活的基础设施。skill/仓库脚本里的逻辑
+// 必须在编译期【内联/抄进】脚本本身(钉成快照),换机/换版本即跑、可入仓版本化。
+const SKILL_DEP = /\.claude\/skills/; // skill 提示词永不该是运行时依赖
+
+export function containmentViolations(script: string, forbid: readonly RegExp[] = []): string[] {
+  const out: string[] = [];
+  if (SKILL_DEP.test(script)) out.push("运行时 read 了 ~/.claude/skills(skill 提示词应在编译期内联,运行时不该读)");
+  for (const re of forbid) if (re.test(script)) out.push(`运行时依赖了外部仓库脚本(应内联):${re.source}`);
+  return out;
+}
+
 // 让 agent 读 skill + 用 bash 实地试,最后提交一个脚本。
 async function writeScript(o: {
   nl: string;
   skills?: string[];
   cwd?: string;
+  selfContained?: boolean;
   prior?: { script: string; error: string };
 }): Promise<string | null> {
   let captured: string | null = null;
@@ -86,12 +99,17 @@ async function writeScript(o: {
   const prompt = [
     o.prior ? "下面这个脚本坏了,请诊断并修好它。" : "请实现下面这个意图,产出一个【可复用的 shell 脚本】。",
     `意图:${o.nl}`,
-    o.skills?.length ? `相关 skill(可 read 参考):${o.skills.map((s) => `~/.claude/skills/${s}/SKILL.md`).join("、")}` : "",
+    o.skills?.length ? `相关 skill / 仓库脚本(编译期可 read 参考,把需要的逻辑【抄进】产物):${o.skills.map((s) => `~/.claude/skills/${s}/SKILL.md`).join("、")}` : "",
     o.prior ? `旧脚本:\n\`\`\`\n${o.prior.script}\n\`\`\`\n报错/异常输出:\n\`\`\`\n${o.prior.error.slice(0, 1500)}\n\`\`\`` : "",
     "要求:",
     "1. 用 bash 工具【实地试】到脚本能跑出正确结果(读 skill、试命令、看输出);",
     "2. 脚本要幂等、尽量只读,把结果打到 stdout;",
-    "3. 实地试通过后再调用 submit_script 提交最终脚本——不要提交没试过的脚本。",
+    o.selfContained
+      ? "3. 【自包含硬要求】产物必须自包含:运行时【只能】用系统工具(curl/jq/ssh/glab/git/docker 等)和活的基础设施(平台/测试机)。" +
+        "运行时【禁止】read ~/.claude/skills、【禁止】shell-out 到某个本机仓库检出里的脚本(如 …/scripts/*.sh)。" +
+        "需要 skill 或仓库脚本里的逻辑,就在编译期把它【内联/抄进】本脚本(钉成快照),让脚本脱离 skill/仓库也能跑;"
+      : "3. 脚本尽量自包含;",
+    "4. 实地试通过后再调用 submit_script 提交最终脚本——不要提交没试过的脚本。",
   ]
     .filter(Boolean)
     .join("\n");
@@ -104,10 +122,23 @@ const TRANSIENT = /timeout|timed out|5\d\d\b|connection reset|temporarily|又 tr
 
 export async function crystallize(
   action: CrystallizableAction,
-  opts: { cache: CrystalCache; escalate: EscalationHandler; maxRepairs?: number; onLog?: (m: string) => void },
+  opts: {
+    cache: CrystalCache;
+    escalate: EscalationHandler;
+    maxRepairs?: number;
+    onLog?: (m: string) => void;
+    selfContained?: boolean; // 要求产物自包含(运行时不依赖 skill/外部仓库脚本)
+    forbidRuntimeDeps?: readonly RegExp[]; // 项目侧额外禁止的运行时依赖(如外部仓库脚本路径)
+  },
 ): Promise<CrystallizeResult> {
   const log = opts.onLog ?? (() => {});
   const max = opts.maxRepairs ?? 2;
+  // 自包含违规 → 当作一次"验收失败",逼自修把逻辑内联(静态属性,查到就不必跑)。
+  const containMsg = (script: string): string | null => {
+    if (!opts.selfContained) return null;
+    const v = containmentViolations(script, opts.forbidRuntimeDeps ?? []);
+    return v.length ? `脚本不自包含:${v.join(";")}。把需要的逻辑【内联/抄进】脚本,运行时别依赖 skill 或外部仓库脚本。` : null;
+  };
 
   // 危险写:固化/运行前过授权闸。
   if (action.danger) {
@@ -132,16 +163,23 @@ export async function crystallize(
     failOut = out.output;
   } else {
     log(`[crystallize:${action.id}] 首次编译……`);
-    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd });
+    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained: opts.selfContained });
     if (!script) throw new Error(`crystallize ${action.id} 编译失败:没产出脚本`);
-    const out = await sh(script, { cwd: action.cwd });
-    if (await action.verify(out.output)) {
-      opts.cache.save(action.id, script, 1, action.nl);
-      log(`[crystallize:${action.id}] 编译+独立验收通过,缓存 v1`);
-      return { output: out.output, signal: out.stdout.trim(), mode: "compiled" };
+    const cv = containMsg(script);
+    if (cv) {
+      log(`[crystallize:${action.id}] ${cv} → 自修内联`);
+      prev = { script, version: 0 };
+      failOut = cv;
+    } else {
+      const out = await sh(script, { cwd: action.cwd });
+      if (await action.verify(out.output)) {
+        opts.cache.save(action.id, script, 1, action.nl);
+        log(`[crystallize:${action.id}] 编译+独立验收通过,缓存 v1`);
+        return { output: out.output, signal: out.stdout.trim(), mode: "compiled" };
+      }
+      prev = { script, version: 0 };
+      failOut = out.output;
     }
-    prev = { script, version: 0 };
-    failOut = out.output;
   }
 
   // 自修循环(有界)。
@@ -154,8 +192,15 @@ export async function crystallize(
       }
     }
     log(`[crystallize:${action.id}] 自修第 ${i}/${max} 轮……`);
-    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, prior: { script: prev?.script ?? "", error: failOut } });
+    const script = await writeScript({ nl: action.nl, skills: action.skills, cwd: action.cwd, selfContained: opts.selfContained, prior: { script: prev?.script ?? "", error: failOut } });
     if (!script) break;
+    const cv = containMsg(script);
+    if (cv) {
+      log(`[crystallize:${action.id}] 仍不自包含 → 继续自修`);
+      prev = { script, version: prev?.version ?? 0 };
+      failOut = cv;
+      continue; // 静态违规,不必跑,直接再修
+    }
     const out = await sh(script, { cwd: action.cwd });
     if (await action.verify(out.output)) {
       const ver = (prev?.version ?? 0) + 1;

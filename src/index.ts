@@ -57,6 +57,7 @@ export {
   consoleEscalation,
   denyByDefault,
   resolveOrEscalate,
+  selfManagedGate,
 } from "./escalate.ts";
 
 // 观测
@@ -79,6 +80,7 @@ export {
   type CrystallizableAction,
   type CrystalCache,
   type CrystallizeResult,
+  containmentViolations,
   crystallize,
   fileCache,
 } from "./crystallize.ts";
