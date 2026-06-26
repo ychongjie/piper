@@ -1,23 +1,19 @@
 // YAML loader:严格校验(封闭词汇)后,编译成 AgentDef(和 TS builder 同一窄腰)。
 // 未知键/错类型 → AgentSchemaError(在 validateAgentYaml 里)。
 import { parse } from "yaml";
-import type { AgentDef, GoalDef, GuardDef, SignalKind, StepDef, VerifyDef } from "./agent.ts";
+import type { AgentDef, GoalDef, GuardDef, JudgeDef, StepDef } from "./agent.ts";
 import { validateAgentYaml } from "./agent-schema.ts";
 
 export function loadAgentYaml(text: string): AgentDef {
   const d: any = parse(text);
   validateAgentYaml(d); // 封闭词汇:未知键即报错
 
-  const doNode = d.loop.do;
   return {
     name: d.agent,
-    distilledFrom: d.distilled_from ? { sessions: d.distilled_from.sessions, skills: d.distilled_from.skills } : undefined,
-    forbidRuntimeDeps: d.forbid_runtime_deps,
     loop: {
       on: String(d.loop.on),
-      signal: d.loop.signal as SignalKind | undefined,
       every: d.loop.every ? String(d.loop.every) : undefined,
-      do: parseDo(doNode),
+      do: parseDo(d.loop.do),
     },
     guard: parseGuard(d.guard),
   };
@@ -29,7 +25,7 @@ function parseDo(doNode: any): GoalDef {
     using: doNode.using,
     model: doNode.model ? String(doNode.model) : undefined,
     steps: Array.isArray(doNode.steps) ? doNode.steps.map(parseStep) : undefined,
-    verify: parseVerify(doNode.verify),
+    judge: doNode.judge ? parseJudge(doNode.judge) : undefined,
   };
 }
 
@@ -46,19 +42,11 @@ function parseStep(s: any): StepDef {
   };
 }
 
-function parseVerify(v: any): VerifyDef {
-  if (v?.panel) {
-    const p = v.panel;
-    return { panel: { n: p.n, judge: String(p.judge), ground: p.ground, labels: p.labels, escalateIf: p.escalate_if } };
-  }
-  return { check: String(v.check) };
+function parseJudge(j: any): JudgeDef {
+  return { ask: String(j.ask), ground: j.ground, labels: j.labels };
 }
 
 function parseGuard(g: any): GuardDef | undefined {
   if (!g) return undefined;
-  return {
-    owns: g.owns ? String(g.owns) : undefined,
-    budget: g.budget,
-    rules: Array.isArray(g.rules) ? g.rules.map((r: any) => ({ when: String(r.when), require: String(r.require) })) : undefined,
-  };
+  return { owns: g.owns ? String(g.owns) : undefined, budget: g.budget };
 }

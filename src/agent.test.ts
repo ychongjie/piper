@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import type { AgentDef, RunDeps } from "./agent.ts";
 import { runAgent } from "./agent.ts";
-import type { CrystalCache } from "./crystallize.ts";
+import type { CrystalCache } from "./compile.ts";
 import { denyByDefault } from "./escalate.ts";
 
 function memCache(): CrystalCache {
@@ -16,10 +16,9 @@ test("do 步骤:自管放行、build 无闸、碰别人的环境→升级deny→
     name: "t",
     loop: {
       on: "有新提交",
-      signal: "commit-sha",
       do: {
         nl: "对账→编译→部署",
-        verify: { check: "失败0" }, // check 验收 → 不起 panel
+        // 无 judge → 不起 panel(只验步骤)
         steps: [
           { id: "step-reconcile", nl: "对账本 agent 专用环境", danger: "重建本 agent 专用环境", verify: "reconciled" },
           { id: "step-build", nl: "编译二进制", verify: "built" },

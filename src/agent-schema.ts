@@ -21,21 +21,15 @@ const Step = Type.Object(
   closed,
 );
 
-const Panel = Type.Object(
+// do 层验收 = 活判断(独立判官,不固化)。ask=判什么;ground=取证手段(NL);labels=候选结论。
+const Judge = Type.Object(
   {
-    n: Type.Integer({ minimum: 1 }),
-    judge: Type.String(),
+    ask: Type.String(),
     ground: Type.Array(Type.String()),
     labels: Type.Optional(Type.Array(Type.String())),
-    escalate_if: Type.Optional(Type.String()),
   },
   closed,
 );
-
-const Verify = Type.Union([
-  Type.Object({ check: Type.String() }, closed),
-  Type.Object({ panel: Panel }, closed),
-]);
 
 const Do = Type.Object(
   {
@@ -43,7 +37,7 @@ const Do = Type.Object(
     using: Type.Optional(Type.Array(Type.String())),
     model: Type.Optional(Type.String()), // 默认标准模型名(触发器 + 各 step 缺省用它)
     steps: Type.Optional(Type.Array(Step)), // 声明式多步;缺省=把 goal 当单步
-    verify: Verify,
+    judge: Type.Optional(Judge), // 活判断;缺省=只靠各 step 的 verify(机械门)
   },
   closed,
 );
@@ -53,17 +47,14 @@ const Guard = Type.Object(
   {
     owns: Type.Optional(Type.String()),
     budget: Type.Optional(Type.Integer({ minimum: 0 })),
-    rules: Type.Optional(Type.Array(Type.Object({ when: Type.String(), require: Type.String() }, closed))),
   },
   closed,
 );
 
 const Loop = Type.Object(
   {
-    on: Type.String(),
-    // 触发器输出 → build id 的契约(封闭枚举);缺省=非空。
-    signal: Type.Optional(Type.Union([Type.Literal("commit-sha"), Type.Literal("package-version"), Type.Literal("nonempty")])),
-    every: Type.Optional(Type.String()),
+    on: Type.String(), // 触发器(只读查询,把构建 key 打到 stdout;去重=stdout 全等)
+    every: Type.Optional(Type.String()), // 探测节奏(watch 默认用它)
     do: Do,
   },
   closed,
@@ -72,10 +63,6 @@ const Loop = Type.Object(
 export const AgentYamlSchema = Type.Object(
   {
     agent: Type.String(),
-    distilled_from: Type.Optional(
-      Type.Object({ sessions: Type.Optional(Type.Array(Type.String())), skills: Type.Optional(Type.Array(Type.String())) }, closed),
-    ),
-    forbid_runtime_deps: Type.Optional(Type.Array(Type.String())), // 自包含禁则(正则字符串)
     loop: Loop,
     guard: Type.Optional(Guard),
   },

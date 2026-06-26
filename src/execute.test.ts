@@ -1,6 +1,7 @@
-// crystallize 单测:mock 编译(假后端喂脚本)+ 本地 echo 当"跑脚本",不打网络。跑:bun test
+// execute 单测:mock 编译(假后端喂脚本)+ 本地 echo 当"跑脚本",不打网络。跑:bun test
 import { expect, test } from "bun:test";
-import { type CrystalCache, containmentViolations, crystallize } from "./crystallize.ts";
+import { type CrystalCache, containmentViolations } from "./compile.ts";
+import { crystallize, runAction, NeedsCompileError } from "./execute.ts";
 import { denyByDefault } from "./escalate.ts";
 import { setBackendOverride } from "./session.ts";
 
@@ -62,6 +63,22 @@ test("危险写授权被拒 → 抛错(不执行)", async () => {
   ).rejects.toThrow(/授权被拒/);
 });
 
+// ---- 严格执行:缺产物 → NeedsCompile(不就地编译)----
+test("runAction 严格:缓存里没有 → 抛 NeedsCompile", async () => {
+  const cache = memCache();
+  await expect(
+    runAction({ id: "miss", nl: "n", verify: () => true }, { cache, escalate: esc }),
+  ).rejects.toBeInstanceOf(NeedsCompileError);
+});
+
+test("runAction 严格:命中缓存 → 跑脚本(不编译)", async () => {
+  const cache = memCache();
+  cache.save("hit", "echo ok", 3, "n");
+  const r = await runAction({ id: "hit", nl: "n", verify: (o) => o.includes("ok") }, { cache, escalate: esc });
+  expect(r.mode).toBe("cached");
+  expect(r.version).toBe(3);
+});
+
 // ---- 自包含:静态检查(纯函数)----
 const REPO_SCRIPT = /(?:bash|sh|source)\s+\S*tester\/api-test\/scripts\/[\w-]+\.sh/;
 
@@ -70,9 +87,14 @@ test("自包含检查:read ~/.claude/skills → 违规", () => {
   expect(v[0]).toMatch(/\.claude\/skills/);
 });
 
-test("自包含检查:shell-out 到外部仓库脚本 → 违规", () => {
-  const v = containmentViolations("bash $HOME/Code/gitlab/safeline-3/tester/api-test/scripts/provision-env.sh", [REPO_SCRIPT]);
-  expect(v[0]).toMatch(/外部仓库脚本/);
+test("自包含检查:shell-out 到本机 .sh(绝对路径)→ 违规(内置,无需 forbid)", () => {
+  const v = containmentViolations("bash $HOME/Code/gitlab/safeline-3/tester/api-test/scripts/provision-env.sh");
+  expect(v.some((x) => /\.sh/.test(x))).toBe(true);
+});
+
+test("自包含检查:shell-out 到本机 .sh(相对路径)→ 违规", () => {
+  const v = containmentViolations("bash tester/api-test/scripts/provision-env.sh");
+  expect(v.some((x) => /\.sh/.test(x))).toBe(true);
 });
 
 test("自包含检查:只用系统工具 + 内联逻辑 → 干净", () => {

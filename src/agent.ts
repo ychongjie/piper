@@ -1,31 +1,28 @@
 // 蒸馏式 agent 的节点模型 + TS builder + 运行时。
-// 一份 agent = loop(on=固化触发器) → do(goal/steps,用 skill 做) → verify(panel,独立判官) + guard(自管闸)。
+// 一份 agent = loop(on=固化触发器, every) → do(goal/steps,用 skill 做) → judge(独立判官) + guard(自管闸)。
 // YAML 和 TS 都编译到这个 AgentDef(窄腰)。词汇由 agent-schema.ts 封闭校验。
-// 引擎从 AgentDef【自己解析】steps→固化动作、guard→自管闸、signal→触发契约;项目侧不再手写这些。
+// 引擎从 AgentDef【自己解析】steps→固化动作、guard→自管闸;触发器去重=stdout 全等;项目侧不再手写这些。
 // runAgent=单 tick;runSentinel=常驻哨兵(loop+去重+持久化)。
 
 import { homedir } from "node:os";
 import type { defineTool } from "@earendil-works/pi-coding-agent";
-import { type CrystallizableAction, crystallize } from "./crystallize.ts";
+import { type CrystallizableAction, type CrystalCache, compileAction } from "./compile.ts";
+import { runAction } from "./execute.ts";
 import { type EscalationHandler, selfManagedGate } from "./escalate.ts";
 import { loop as scheduleLoop } from "./loop.ts";
 import { type PanelResult, panel } from "./panel.ts";
 
-export type SignalKind = "commit-sha" | "package-version" | "nonempty";
-
 export interface AgentDef {
   name: string;
-  distilledFrom?: { sessions?: string[]; skills?: string[] };
-  forbidRuntimeDeps?: string[]; // 自包含禁则(正则字符串)
-  loop: { on: string; signal?: SignalKind; every?: string; do: GoalDef };
+  loop: { on: string; every?: string; do: GoalDef };
   guard?: GuardDef;
 }
 export interface GoalDef {
-  nl: string;
-  using?: string[]; // skills
+  nl: string; // goal:这一轮的意图
+  using?: string[]; // skills(编译期参考;step 缺省继承)
   model?: string; // 默认标准模型名(触发器 + 各 step 缺省用它;step 可覆盖)
-  steps?: StepDef[]; // 声明式多步;缺省=goal 当单步声明
-  verify: VerifyDef;
+  steps?: StepDef[]; // 声明式多步
+  judge?: JudgeDef; // do 层验收=活判断(独立判官);缺省=只靠各 step 的 verify
 }
 export interface StepDef {
   id: string;
@@ -37,38 +34,30 @@ export interface StepDef {
   selfContained?: boolean;
   verify?: string; // 对 stdout 的正则契约;缺省=非空
 }
-export type VerifyDef = { check: string } | { panel: PanelDef };
-export interface PanelDef {
-  n: number;
-  judge: string;
-  ground: string[];
-  labels?: string[];
-  escalateIf?: string;
+export interface JudgeDef {
+  ask: string; // 判官判什么(NL)
+  ground: string[]; // 取证手段(NL → 运行期解析成工具)
+  labels?: string[]; // 候选结论
 }
 export interface GuardDef {
   owns?: string; // 认领"本 agent 自管资源"的正则
   budget?: number; // 预算内自动放行次数
-  rules?: GuardRule[];
-}
-export interface GuardRule {
-  when: string;
-  require: string;
 }
 
 // ---- TS builder(和 YAML 等价)----
 export const agent = (name: string, meta: Omit<AgentDef, "name" | "loop">, loop: AgentDef["loop"]): AgentDef => ({ name, loop, ...meta });
 export const loop = (on: string, doGoal: GoalDef, every?: string) => ({ on, every, do: doGoal });
-export const goal = (nl: string, o: { using?: string[]; steps?: StepDef[]; verify: VerifyDef }): GoalDef => ({ nl, ...o });
-export const panelOf = (n: number, judge: string, o: { ground: string[]; labels?: string[]; escalateIf?: string }): VerifyDef => ({ panel: { n, judge, ...o } });
-export const check = (nl: string): VerifyDef => ({ check: nl });
+export const goal = (nl: string, o: { using?: string[]; model?: string; steps?: StepDef[]; judge?: JudgeDef }): GoalDef => ({ nl, ...o });
+export const judgeOf = (ask: string, o: { ground: string[]; labels?: string[] }): JudgeDef => ({ ask, ...o });
 
 // ---- 运行时依赖(项目侧注入,只剩"运行环境"相关)----
 export interface RunDeps {
-  cache: import("./crystallize.ts").CrystalCache;
+  cache: CrystalCache;
   escalateFallback: EscalationHandler; // 自管闸的 fallback(有人值守=问人 / 无人=安全默认)
   cwd?: string;
   resolveGround: (groundNl: string[]) => ReturnType<typeof defineTool>[]; // panel ground NL → 取证工具(ground 固化是后续阶段)
   caseForVerify?: () => Promise<{ judgeContext: string } | null>; // 待判失败用例(真实里来自跑测;历史用例是 demo)
+  compileMissing?: boolean; // 执行期缺产物时就地编译(dev/惰性);缺省 false=严格,先跑 compileAgent
   onLog?: (m: string) => void;
 }
 
@@ -88,35 +77,9 @@ export interface TickResult {
 
 // ── 引擎解析:从 AgentDef 派生触发契约 / 步骤动作 / 自管闸 ──────────────────
 
-const DEFAULT_BUILD_ID = (signal: string): string => {
-  try {
-    const j = JSON.parse(signal);
-    return String(j.ref_name ?? j.id ?? signal);
-  } catch {
-    const m = signal.match(/\d{2}\.\d{2}\.\d{2,}[\w.-]*/);
-    return m ? m[0] : signal.trim().slice(0, 60);
-  }
-};
-
-// signal 枚举 → 触发器输出的验收契约 + build id 抽取(替代项目侧手写 triggerVerify/buildIdOf)。
-const SIGNAL: Record<SignalKind, { verify: (o: string) => boolean; buildId: (s: string) => string }> = {
-  "commit-sha": {
-    verify: (o) => /\b[0-9a-f]{7,40}\b/i.test(o),
-    buildId: (s) => {
-      const m = s.match(/\b[0-9a-f]{7,40}\b/i);
-      return m ? m[0].slice(0, 12) : s.trim().slice(0, 12);
-    },
-  },
-  "package-version": {
-    verify: (o) => /\d{2}\.\d{2}\.\d{2,}[\w.-]*/.test(o),
-    buildId: (s) => {
-      const m = s.match(/\d{2}\.\d{2}\.\d{2,}[\w.-]*/);
-      return m ? m[0] : s.trim().slice(0, 60);
-    },
-  },
-  nonempty: { verify: (o) => o.trim().length > 0, buildId: DEFAULT_BUILD_ID },
-};
-const signalOf = (a: AgentDef) => SIGNAL[a.loop.signal ?? "nonempty"];
+const DEFAULT_JUDGES = 3; // judge 起几个独立判官(默认;不进 YAML 词汇)
+// 触发器去重 = stdout 全等:触发器脚本编译后只打印那一个构建 key,无需 signal 枚举抽取。
+const buildIdOf = (raw: string): string => raw.trim();
 
 // YAML 里 cwd 可写 ~/… 或 $HOME/…(引擎展开;cwd 传给 spawn 不经 shell,不会自动展开)。
 const expandHome = (p?: string): string | undefined => p?.replace(/^(~|\$HOME)(?=\/|$)/, homedir());
@@ -140,8 +103,6 @@ const stepsToActions = (a: AgentDef): CrystallizableAction[] =>
     verify: compileVerify(s.verify),
   }));
 
-const forbidPatterns = (a: AgentDef): RegExp[] => (a.forbidRuntimeDeps ?? []).map((s) => new RegExp(s));
-
 // guard → 自管闸:owns 命中且预算内自动放行,否则走 fallback。无 owns 则直接用 fallback。
 const buildGate = (a: AgentDef, fallback: EscalationHandler): EscalationHandler => {
   const g = a.guard;
@@ -154,27 +115,42 @@ const buildGate = (a: AgentDef, fallback: EscalationHandler): EscalationHandler 
   });
 };
 
-// ── 运行 ────────────────────────────────────────────────────────────────
+// 触发器动作:固化成只读轮询脚本(强制自包含),探当前最新构建。
+const triggerAction = (a: AgentDef, cwd?: string): CrystallizableAction => ({
+  id: `${a.name}__trigger`,
+  nl: a.loop.on,
+  skills: a.loop.do.using,
+  model: a.loop.do.model, // 触发器用 do 默认编译模型
+  cwd: expandHome(cwd),
+  danger: null,
+  selfContained: true, // 只读触发器强制自包含(产物可入仓钉死)
+  verify: (o) => o.trim().length > 0, // 触发器只需非空;去重=stdout 全等
+});
 
-// ① 探测:固化触发器成只读轮询脚本(强制自包含),探当前最新构建,按 signal 契约抽 build id。
+// ── 编译阶段:离线把触发器 + 所有 step 固化成自包含产物(入仓、可 review)──────────
+/** 编译一个 agent 的全部动作(触发器 + steps)。执行前先跑此阶段;执行期不再首次编译。 */
+export async function compileAgent(a: AgentDef, deps: Pick<RunDeps, "cache" | "escalateFallback" | "cwd" | "onLog">): Promise<void> {
+  const log = deps.onLog ?? (() => {});
+  const gate = buildGate(a, deps.escalateFallback);
+  const actions = [triggerAction(a, deps.cwd), ...stepsToActions(a)];
+  log(`[${a.name}] 编译阶段:${actions.length} 个动作`);
+  for (const action of actions) {
+    await compileAction(action, { cache: deps.cache, escalate: gate, selfContained: action.selfContained, onLog: (m) => log(`  ${m}`) });
+  }
+  log(`[${a.name}] 编译完成`);
+}
+
+// ── 执行 ────────────────────────────────────────────────────────────────
+
+// ① 探测:跑已编译的触发器脚本,取 stdout 作构建 key(去重=全等)。
 async function detectSignal(a: AgentDef, deps: RunDeps, gate: EscalationHandler, log: (m: string) => void): Promise<{ raw: string; buildId: string } | null> {
-  const sc = signalOf(a);
-  const trigger: CrystallizableAction = {
-    id: `${a.name}__trigger`,
-    nl: a.loop.on,
-    skills: a.loop.do.using,
-    model: a.loop.do.model, // 触发器用 do 默认模型
-    cwd: expandHome(deps.cwd),
-    danger: null,
-    selfContained: true, // 只读触发器强制自包含(产物可入仓钉死)
-    verify: sc.verify,
-  };
+  const trigger = triggerAction(a, deps.cwd);
   try {
-    const t = await crystallize(trigger, { cache: deps.cache, escalate: gate, maxRepairs: 1, onLog: log, forbidRuntimeDeps: forbidPatterns(a) });
+    const t = await runAction(trigger, { cache: deps.cache, escalate: gate, maxRepairs: 1, onLog: log, selfContained: true, compileIfMissing: deps.compileMissing });
     if (!t.signal) return null;
-    return { raw: t.signal, buildId: sc.buildId(t.signal) };
+    return { raw: t.signal, buildId: buildIdOf(t.signal) };
   } catch (e) {
-    log(`[${a.name}] 触发器固化未成:${(e as Error).message}`);
+    log(`[${a.name}] 触发器执行未成:${(e as Error).message}`);
     return null;
   }
 }
@@ -183,13 +159,12 @@ async function detectSignal(a: AgentDef, deps: RunDeps, gate: EscalationHandler,
 async function runDo(a: AgentDef, _buildId: string, deps: RunDeps, gate: EscalationHandler, log: (m: string) => void): Promise<{ verify?: PanelResult; steps: StepOutcome[] }> {
   const steps: StepOutcome[] = [];
   let testOutput: string | undefined;
-  const forbid = forbidPatterns(a);
 
   const actions = stepsToActions(a);
   if (actions.length) {
     for (const step of actions) {
       try {
-        const r = await crystallize(step, { cache: deps.cache, escalate: gate, onLog: log, forbidRuntimeDeps: forbid });
+        const r = await runAction(step, { cache: deps.cache, escalate: gate, onLog: log, compileIfMissing: deps.compileMissing });
         steps.push({ id: step.id, mode: r.mode, ok: true, note: r.mode });
         log(`步骤 ${step.id}:${r.mode} ✓`);
         testOutput = r.output; // 最后一步(run-test)的输出 = 真实测试结果
@@ -204,27 +179,26 @@ async function runDo(a: AgentDef, _buildId: string, deps: RunDeps, gate: Escalat
     log(`goal:${a.loop.do.nl} —— do 未声明 steps`);
   }
 
-  // verify:有真实测试输出就用它当判官上下文;否则用注入的(历史)用例。
+  // judge:有真实测试输出就用它当判官上下文;否则用注入的(历史)用例。
   let verify: PanelResult | undefined;
-  const vd = a.loop.do.verify;
-  if ("panel" in vd) {
+  const jd = a.loop.do.judge;
+  if (jd) {
     const ctx = testOutput ?? (deps.caseForVerify ? (await deps.caseForVerify())?.judgeContext : undefined);
     if (ctx) {
-      const p = vd.panel;
-      log(`verify:起 ${p.n} 个独立判官……`);
+      log(`judge:起 ${DEFAULT_JUDGES} 个独立判官……`);
       verify = await panel(
         {
-          n: p.n,
-          judge: `${p.judge}\n\n待判情况:\n${ctx}`,
-          ground: deps.resolveGround(p.ground),
-          labels: p.labels,
-          escalateLabels: p.labels?.filter((l) => /版本错位|out_of_scope|超范围/.test(l)),
+          n: DEFAULT_JUDGES,
+          judge: `${jd.ask}\n\n待判情况:\n${ctx}`,
+          ground: deps.resolveGround(jd.ground),
+          labels: jd.labels,
+          escalateLabels: jd.labels?.filter((l) => /版本错位|out_of_scope|超范围/.test(l)),
         },
         gate,
       );
-      log(`verify 判官结论 = ${verify.verdict}${verify.escalated ? "(⚠ 升级)" : ""}  票数=${JSON.stringify(verify.tally)}`);
+      log(`judge 判官结论 = ${verify.verdict}${verify.escalated ? "(⚠ 升级)" : ""}  票数=${JSON.stringify(verify.tally)}`);
     } else {
-      log("verify:无失败用例 / 无测试输出(测试干净 → 无回归)");
+      log("judge:无失败用例 / 无测试输出(测试干净 → 无回归)");
     }
   }
   return { verify, steps };

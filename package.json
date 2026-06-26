@@ -7,6 +7,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "bin": {
+    "piper": "./bin/piper.ts"
+  },
   "scripts": {
     "test": "bun test"
   },

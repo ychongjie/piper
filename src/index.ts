@@ -77,32 +77,44 @@ export { type GitlabReader, type Job, type Pipeline, gitlabReader } from "./ci/g
 // ===== 蒸馏式 agent 原语面(loop/goal/panel/guard + 固化 + YAML)=====
 // panel:一组独立判官(活的判断)
 export { type PanelOpts, type PanelResult, type Verdict, panel } from "./panel.ts";
-// crystallize:把机械意图固化成可复用脚本 + 自修
+// 编译阶段:把机械意图固化成自包含脚本(离线 / 运行期结构性自修共用)
 export {
   type CrystallizableAction,
   type CrystalCache,
-  type CrystallizeResult,
+  type CompiledScript,
+  type CompileOpts,
+  type CompileResult,
+  type Lock,
+  type LockEntry,
+  compileAction,
   containmentViolations,
-  crystallize,
   fileCache,
-} from "./crystallize.ts";
+  migrateCache,
+  readLock,
+} from "./compile.ts";
+// 执行阶段:跑已编译产物(命中=0 大模型调用)+ 瞬态重试 + 结构性自修
+export {
+  type RunResult,
+  type RunOpts,
+  type CrystallizeResult,
+  NeedsCompileError,
+  runAction,
+  crystallize, // 惰性一体路径(dev/测试):= runAction({compileIfMissing:true})
+} from "./execute.ts";
 // agent 节点模型 + TS builder + 运行时
 export {
   type AgentDef,
   type GoalDef,
   type GuardDef,
-  type GuardRule,
-  type PanelDef,
+  type JudgeDef,
   type RunDeps,
-  type SignalKind,
   type StepDef,
   type TickResult,
-  type VerifyDef,
   agent,
-  check,
+  compileAgent,
   goal,
+  judgeOf,
   loop,
-  panelOf,
   runAgent,
   runSentinel,
 } from "./agent.ts";
