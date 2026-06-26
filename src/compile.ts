@@ -22,7 +22,11 @@ export interface CrystallizableAction {
   danger?: string | null; // 非空=危险写,固化/运行前过授权闸
   selfContained?: boolean; // 覆盖 agent 级 policy:本步产物是否强制自包含
   model?: string; // 编译用的标准模型名(查 piper 配置);缺省=配置 default_model
+  timeoutMs?: number; // 跑该步脚本的超时;缺省 ACTION_TIMEOUT_MS(重活如 build 需要分钟级)
 }
+
+// 动作脚本(编译期试跑 + 执行期跑)的默认超时:build/deploy 是分钟级,60s 不够。
+export const ACTION_TIMEOUT_MS = 15 * 60_000;
 
 export interface CompiledScript {
   script: string;
@@ -163,15 +167,17 @@ function observeSession(session: any, log: (m: string) => void): () => void {
       if (ev.type === "tool_execution_start") {
         const a = ev.args ?? {};
         const d =
-          ev.toolName === "bash" ? `: ${brief(String(a.command ?? ""), 220)}` :
+          ev.toolName === "bash" ? `: ${brief(String(a.command ?? ""), 400)}` :
           ev.toolName === "read" ? `: ${a.path ?? a.file ?? ""}` :
           ev.toolName === "submit_script" ? " (提交最终脚本)" : "";
         log(`    ⎯ ${ev.toolName}${d}`);
       } else if (ev.type === "tool_execution_end") {
-        const t = brief(textOf(ev.result), 200);
+        // 报错不截断(中段错误别被吞);正常输出放宽到 600 字。
+        const raw = textOf(ev.result);
+        const t = ev.isError ? raw.trim() : brief(raw, 600);
         log(`    ⎿ ${ev.isError ? "✗" : "✓"}${t ? " " + t : ""}`);
       } else if (ev.type === "message_end") {
-        const t = brief(textOf(ev.message), 220);
+        const t = brief(textOf(ev.message), 400);
         if (t) log(`    · ${t}`);
       }
     } catch {}
@@ -265,9 +271,11 @@ export async function compileAction(action: CrystallizableAction, opts: CompileO
   const max = opts.maxAttempts ?? 3;
   const selfContained = action.selfContained ?? opts.selfContained;
 
-  // 危险写:编译期"实地试"会真跑危险命令 → 过授权闸(除非调用方已过)。
+  // 危险写:编译期"实地试"会真跑危险命令 → 过授权闸(除非调用方已过)。高声播报 + 打印闸结论。
   if (action.danger && !opts.skipDangerGate) {
+    log(`[compile:${action.id}] ⚠ 危险动作(编译期会真跑):${action.danger} —— 过授权闸……`);
     const res = await opts.escalate({ kind: "authorization", reason: `固化/运行危险动作:${action.danger}`, options: ["approve", "deny"] });
+    log(`[compile:${action.id}] 闸结论:${res.decision}（${res.resolvedBy}${res.note ? " · " + res.note : ""}）`);
     if (res.decision !== "approve") throw new Error(`compile ${action.id} 授权被拒:${action.danger}`);
   }
 
@@ -302,7 +310,7 @@ export async function compileAction(action: CrystallizableAction, opts: CompileO
       continue;
     }
 
-    const out = await sh(script, { cwd: action.cwd });
+    const out = await sh(script, { cwd: action.cwd, timeoutMs: action.timeoutMs ?? ACTION_TIMEOUT_MS });
     if (await action.verify(out.output)) {
       const version = baseVersion + 1;
       opts.cache.save(action.id, script, version, action.nl);

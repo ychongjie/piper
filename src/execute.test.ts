@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { type CrystalCache, containmentViolations } from "./compile.ts";
 import { crystallize, runAction, NeedsCompileError } from "./execute.ts";
 import { denyByDefault } from "./escalate.ts";
+import { sh } from "./sh.ts";
 import { setBackendOverride } from "./session.ts";
 
 function memCache(): CrystalCache {
@@ -77,6 +78,32 @@ test("runAction 严格:命中缓存 → 跑脚本(不编译)", async () => {
   const r = await runAction({ id: "hit", nl: "n", verify: (o) => o.includes("ok") }, { cache, escalate: esc });
   expect(r.mode).toBe("cached");
   expect(r.version).toBe(3);
+});
+
+// ---- 可观测性:危险播报 / 执行输出 / 超时 ----
+const approve = async () => ({ decision: "approve", resolvedBy: "human" as const });
+
+test("危险动作:高声播报 + 打印闸结论", async () => {
+  const cache = memCache();
+  cache.save("d2", "echo done", 1, "n");
+  const logs: string[] = [];
+  await runAction({ id: "d2", nl: "n", danger: "重建本 agent 专用环境", verify: () => true }, { cache, escalate: approve, onLog: (m) => logs.push(m) });
+  const joined = logs.join("\n");
+  expect(joined).toMatch(/⚠ 危险动作.*重建本 agent 专用环境/);
+  expect(joined).toMatch(/闸结论:approve/);
+});
+
+test("执行期落脚本输出尾部(可盯 deploy/build 实际打了什么)", async () => {
+  const cache = memCache();
+  cache.save("o1", "echo HELLO_FROM_SCRIPT", 1, "n");
+  const logs: string[] = [];
+  await runAction({ id: "o1", nl: "n", verify: (o) => o.includes("HELLO") }, { cache, escalate: esc, onLog: (m) => logs.push(m) });
+  expect(logs.join("\n")).toContain("HELLO_FROM_SCRIPT");
+});
+
+test("sh 尊重 timeoutMs(重活超时即失败,不再卡死 60s)", async () => {
+  const r = await sh("sleep 0.5", { timeoutMs: 60 });
+  expect(r.ok).toBe(false);
 });
 
 // ---- 自包含:静态检查(纯函数)----

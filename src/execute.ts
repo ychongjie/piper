@@ -4,9 +4,15 @@
 //   - 上层 verify 的判官 panel(见 agent.ts;不在本文件)。
 // 缓存命中就直接跑脚本,0 次大模型调用——这是"降算力"的本体。
 
-import { type CompileResult, type CrystallizableAction, type CrystalCache, compileAction } from "./compile.ts";
+import { ACTION_TIMEOUT_MS, type CompileResult, type CrystallizableAction, type CrystalCache, compileAction } from "./compile.ts";
 import type { EscalationHandler } from "./escalate.ts";
 import { sh } from "./sh.ts";
+
+// 日志里展示脚本输出的尾部(执行期可观测:看清 deploy/build 到底打了什么)。
+const tailOut = (s: string, n = 2000): string => {
+  const t = s.trim();
+  return t.length <= n ? t : `…（前略 ${t.length - n} 字）\n${t.slice(-n)}`;
+};
 
 export interface RunResult {
   output: string;
@@ -47,11 +53,15 @@ export async function runAction(action: CrystallizableAction, opts: RunOpts): Pr
   const compileIfMissing = opts.compileIfMissing ?? false;
   const allowRecompile = opts.allowRecompile ?? true;
 
-  // 危险写:运行真跑前过授权闸(只在此过一次;自修重编时告诉 compileAction 别再过)。
+  // 危险写:运行真跑前过授权闸(只在此过一次;自修重编时告诉 compileAction 别再过)。高声播报 + 打印闸结论。
   if (action.danger) {
+    log(`[run:${action.id}] ⚠ 危险动作(即将真跑):${action.danger} —— 过授权闸……`);
     const res = await opts.escalate({ kind: "authorization", reason: `运行危险动作:${action.danger}`, options: ["approve", "deny"] });
+    log(`[run:${action.id}] 闸结论:${res.decision}（${res.resolvedBy}${res.note ? " · " + res.note : ""}）`);
     if (res.decision !== "approve") throw new Error(`run ${action.id} 授权被拒:${action.danger}`);
   }
+
+  const timeoutMs = action.timeoutMs ?? ACTION_TIMEOUT_MS;
 
   const recompile = (prior?: { script: string; error: string }): Promise<CompileResult> =>
     compileAction(action, {
@@ -77,9 +87,10 @@ export async function runAction(action: CrystallizableAction, opts: RunOpts): Pr
   }
 
   // 跑缓存脚本(命中路径:0 大模型调用)。
-  const out = await sh(cached.script, { cwd: action.cwd });
+  const out = await sh(cached.script, { cwd: action.cwd, timeoutMs });
+  if (out.output.trim()) log(`[run:${action.id}] 脚本输出(尾）:\n${tailOut(out.output)}`);
   if (await action.verify(out.output)) {
-    log(`[run:${action.id}] 缓存命中(v${cached.version})`);
+    log(`[run:${action.id}] 缓存命中(v${cached.version})✓ 验收通过`);
     return { output: out.output, signal: out.stdout.trim(), mode: "cached", version: cached.version };
   }
 
@@ -90,7 +101,7 @@ export async function runAction(action: CrystallizableAction, opts: RunOpts): Pr
   for (let i = 1; i <= max; i++) {
     // 瞬态:重试原脚本即可。
     if (TRANSIENT.test(failOut)) {
-      const retry = await sh(priorScript, { cwd: action.cwd });
+      const retry = await sh(priorScript, { cwd: action.cwd, timeoutMs });
       if (await action.verify(retry.output)) {
         log(`[run:${action.id}] 瞬态,重试旧脚本即过`);
         return { output: retry.output, signal: retry.stdout.trim(), mode: "cached", version: cached.version };
