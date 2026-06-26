@@ -5,7 +5,6 @@
 // runAgent=单 tick;runSentinel=常驻哨兵(loop+去重+持久化)。
 
 import { homedir } from "node:os";
-import type { defineTool } from "@earendil-works/pi-coding-agent";
 import { type CrystallizableAction, type CrystalCache, compileAction } from "./compile.ts";
 import { runAction } from "./execute.ts";
 import { type EscalationHandler, selfManagedGate } from "./escalate.ts";
@@ -55,7 +54,6 @@ export interface RunDeps {
   cache: CrystalCache;
   escalateFallback: EscalationHandler; // 自管闸的 fallback(有人值守=问人 / 无人=安全默认)
   cwd?: string;
-  resolveGround: (groundNl: string[]) => ReturnType<typeof defineTool>[]; // panel ground NL → 取证工具(ground 固化是后续阶段)
   caseForVerify?: () => Promise<{ judgeContext: string } | null>; // 待判失败用例(真实里来自跑测;历史用例是 demo)
   compileMissing?: boolean; // 执行期缺产物时就地编译(dev/惰性);缺省 false=严格,先跑 compileAgent
   onLog?: (m: string) => void;
@@ -190,7 +188,8 @@ async function runDo(a: AgentDef, _buildId: string, deps: RunDeps, gate: Escalat
         {
           n: DEFAULT_JUDGES,
           judge: `${jd.ask}\n\n待判情况:\n${ctx}`,
-          ground: deps.resolveGround(jd.ground),
+          groundNl: jd.ground, // 取证手段(NL)进判官提示词;判官用只读 read/bash 自己取证
+          cwd: expandHome(deps.cwd),
           labels: jd.labels,
           escalateLabels: jd.labels?.filter((l) => /版本错位|out_of_scope|超范围/.test(l)),
         },

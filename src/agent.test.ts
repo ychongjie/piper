@@ -38,7 +38,6 @@ test("do 步骤:自管放行、build 无闸、碰别人的环境→升级deny→
   const deps: RunDeps = {
     cache,
     escalateFallback: denyByDefault(), // 闸 fallback:碰别人的 → deny
-    resolveGround: () => [],
   };
 
   const r = await runAgent(a, deps);

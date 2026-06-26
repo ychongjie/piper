@@ -6,7 +6,8 @@
 //   run       执行阶段(单 tick,严格只跑产物)。
 //   watch     执行阶段(常驻哨兵:定时探构建 → 去重 → 跑 do)。
 //
-// run/watch 需要项目侧注入(panel 取证工具 / 待判用例 / cwd):--inject <module.ts>,默认导出 ProjectInject。
+// run/watch 可选项目侧注入(待判用例 / cwd):--inject <module.ts>,默认导出 ProjectInject。
+// 判官取证已内置(只读 read/bash),不再需要项目侧 resolveGround。
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -21,9 +22,8 @@ import {
   runSentinel,
 } from "../src/index.ts";
 
-// 项目侧注入(run/watch 用):panel ground / 待判用例 / 工作目录。全可选。
+// 项目侧注入(run/watch 用):待判用例 / 工作目录。全可选(取证已由判官内置只读 read/bash 完成)。
 interface ProjectInject {
-  resolveGround?: RunDeps["resolveGround"];
   caseForVerify?: RunDeps["caseForVerify"];
   cwd?: string;
 }
@@ -69,7 +69,7 @@ const USAGE = `piper —— 蒸馏→编译→执行 CLI
 通用 opts:
   --cache <dir>          编译产物目录(默认 crystallized)
   --cwd <dir>            触发器/步骤工作目录(覆盖 --inject 的 cwd)
-  --inject <module.ts>   run/watch:项目侧注入(默认导出 {resolveGround?, caseForVerify?, cwd?})
+  --inject <module.ts>   run/watch:项目侧注入(默认导出 {caseForVerify?, cwd?})
   --interactive          升级走交互式问 stdin(默认无人值守:denyByDefault)
   --escalate-log <dir>   无人值守升级落盘目录(默认 logs/escalations)
 watch opts:
@@ -161,7 +161,6 @@ async function main(): Promise<void> {
         cache: fileCache(cacheDir),
         escalateFallback: escalate(),
         cwd: flags.cwd ?? inject.cwd,
-        resolveGround: inject.resolveGround ?? (() => []),
         caseForVerify: inject.caseForVerify,
         compileMissing: bools.has("compile-missing"),
         onLog: log,
@@ -181,7 +180,6 @@ async function main(): Promise<void> {
           cache: fileCache(cacheDir),
           escalateFallback: escalate(),
           cwd: flags.cwd ?? inject.cwd,
-          resolveGround: inject.resolveGround ?? (() => []),
           caseForVerify: inject.caseForVerify,
           onLog: log,
         },

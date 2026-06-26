@@ -13,14 +13,16 @@ import { backendForModel } from "./session.ts";
 
 export interface StructuredWorkerOpts {
   prompt: string;
-  tools: ReturnType<typeof defineTool>[]; // 验证器工具
+  tools: ReturnType<typeof defineTool>[]; // 验证器工具(自定义)
+  builtinTools?: string[]; // 额外内置工具(如 ["read","bash"])。默认不给——强制靠验证器接地、不能凭空乱来。
+  cwd?: string; // 内置工具(read/bash)的工作目录
   captureName: string; // 提交结论的工具名
   captureDescription: string;
   captureSchema: TSchema; // 结论的形状
   onWorkerEvent?: (e: WorkerEvent) => void;
 }
 
-/** 跑一个 worker:用验证器工具取证 → 调 capture 工具提交结构化结论。返回结论(没提交则 null)。 */
+/** 跑一个 worker:用验证器工具(或开了 builtinTools 的只读 read/bash)取证 → 调 capture 提交结构化结论。 */
 export async function structuredWorker<T>(o: StructuredWorkerOpts): Promise<T | null> {
   let captured: T | null = null;
   const capture = defineTool({
@@ -35,8 +37,9 @@ export async function structuredWorker<T>(o: StructuredWorkerOpts): Promise<T | 
   });
   const allTools = [...o.tools, capture];
   const { session } = await backendForModel()({
-    tools: allTools.map((t) => t.name), // 只给验证器 + capture,不给内置工具
+    tools: [...(o.builtinTools ?? []), ...allTools.map((t) => t.name)],
     customTools: allTools,
+    cwd: o.cwd,
   });
   if (o.onWorkerEvent) subscribeWorkerEvents(session, o.onWorkerEvent);
   await session.prompt(o.prompt);

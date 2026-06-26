@@ -25,7 +25,7 @@ const v = (label: string) => ({ label, confidence: "high", evidence: ["接地证
 
 test("三判官一致 → 收敛,不升级", async () => {
   mockBackend([v("测试bug"), v("测试bug"), v("测试bug")]);
-  const r = await panel({ n: 3, judge: "判一下", ground: [] }, denyByDefault());
+  const r = await panel({ n: 3, judge: "判一下", groundNl: [] }, denyByDefault());
   expect(r.verdict).toBe("测试bug");
   expect(r.escalated).toBe(false);
   expect(r.tally).toEqual({ 测试bug: 3 });
@@ -33,13 +33,13 @@ test("三判官一致 → 收敛,不升级", async () => {
 
 test("三方分歧 → 不收敛,升级", async () => {
   mockBackend([v("真回归"), v("测试bug"), v("flake")]);
-  const r = await panel({ n: 3, judge: "判一下", ground: [] }, denyByDefault());
+  const r = await panel({ n: 3, judge: "判一下", groundNl: [] }, denyByDefault());
   expect(r.escalated).toBe(true);
 });
 
 test("收敛到 escalateLabels(版本错位)→ 仍升级,保留标签", async () => {
   mockBackend([v("版本错位"), v("版本错位"), v("版本错位")]);
-  const r = await panel({ n: 3, judge: "判一下", ground: [], escalateLabels: ["版本错位"] }, denyByDefault());
+  const r = await panel({ n: 3, judge: "判一下", groundNl: [], escalateLabels: ["版本错位"] }, denyByDefault());
   expect(r.verdict).toBe("版本错位");
   expect(r.escalated).toBe(true);
 });
