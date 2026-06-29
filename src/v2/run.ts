@@ -22,7 +22,7 @@ export async function runOnce(
 
   if (opts.runTrigger) {
     onLog(`[${a.name}] 触发器……`);
-    const sig = await runNode(a.loop.on, mkCtx());
+    const sig = await runNode(a.loop.on, mkCtx(), "触发");
     onLog(`[${a.name}] 构建信号 = ${sig.result.trim().slice(0, 48)}`);
   }
   onLog(`[${a.name}] 跑 do……`);
