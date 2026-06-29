@@ -1,7 +1,7 @@
 # Piper 设计基线(agent 编排 YAML)
 
-> 本文是**目标设计**,不是对当前实现的描述。当前仓里还存在 crystallize/steps/guard 等旧形态;
-> 这份基线是改 schema / 引擎前的依据。改造时以本文为准。
+> 本文是 Piper 的设计基线,也是**当前实现**:封闭 YAML 词汇由 `src/v2/engine.ts` 活解释执行
+> (`loadAgentV2`/`runOnce`)。早期的 crystallize/compile/steps/guard 三阶段形态已删除,只保留 v2 活引擎。
 
 ## 1. 定位
 
@@ -31,8 +31,9 @@ Piper 把一段**重复的 Claude Code 工作**(会话历史 / 记忆 / 用到�
 3. **常驻 + 生产安全 + 可观测**:守望类任务,要碰生产写、要人能 review。
 
 与 dynamic workflows 的关键差异——**工作层不冻结模型**:
-那篇只把**编排**做成确定性,**工作**永远是活 LLM;Piper 沿用这一点(运行时留活 agent),
-`freeze`(固化成脚本)只作**可选优化**,默认不冻。
+那篇只把**编排**做成确定性,**工作**永远是活 LLM;Piper 沿用这一点——运行时**叶子永远是活 agent**,
+引擎只解释封闭的编排结构(loop/列表/fanout/when),不把工作固化成死脚本。
+(机械操作另由蒸馏期调通的**自包含工具**承担,活 agent 按名调用——见 §5.1。)
 
 ## 2. 核心原则
 
@@ -56,7 +57,7 @@ Piper 把一段**重复的 Claude Code 工作**(会话历史 / 记忆 / 用到�
 | 形态 | 含义 |
 |---|---|
 | `"<NL 串>"` | 叶子(无属性) |
-| `{ intent, verify?, budget?, labels?, model?, using?, cwd?, freeze? }` | 叶子(带属性) |
+| `{ intent, verify?, budget?, labels?, model?, tools?, using?, cwd?, when? }` | 叶子(带属性) |
 | `{ fanout: {...} }` | 并行铺开 + 归约 |
 | `[ <节点>, … ]` | **顺序**(列表本身即 sequence,无关键字) |
 
@@ -100,11 +101,11 @@ fanout:
 | `verify` | 验收契约(见 §4) |
 | `budget` | 活叶子的收敛轮数上限(见 §5) |
 | `labels` | 有 `labels` → 这是个**判官叶子**,产出 `{label, confidence, evidence}` |
-| `model` | 标准模型名(piper 配置映射到网关) |
-| `tools` | **运行期可调的自包含工具脚本名**(蒸馏生成,在 `<agent>.tools/`);引擎注入这些工具及其文档给该 agent(见 §6.1) |
+| `model` | 标准模型名(省略=`default_model`,piper 配置映射到网关);引擎日志按 `[角色·模型]` 标注每个 agent 输出,便于分析/benchmark |
+| `tools` | **运行期可调的自包含工具脚本名**(蒸馏生成,在 `<agent>.tools/`);引擎注入这些工具及其文档给该 agent(见 §5.1) |
 | `using` | 蒸馏期参考的知识来源 skill(从中内联出 `tools`) |
 | `cwd` | 工作目录(可 `~`/`$HOME`) |
-| `freeze` | 可选:把这片机械叶子**直接当脚本跑**(无 agent)。与 `tools` 同种产物(自包含脚本),只是用法不同:`freeze`=整叶子就是脚本;`tools`=活 agent 调脚本 |
+| `when` | 机械守卫:紧邻上一步 label == 此值才跑(见 §3 `when`) |
 
 ### `when`(条件,机械)
 
@@ -147,7 +148,7 @@ verify: { intent: <判什么>, ground?: [<取证手段>], n?: <判官数> }   # 
 - 这同时解决了"plan→execute 数据流":plan 在同一上下文里,执行直接用,不用显式传。
 - 放弃的:锚死在烂 plan 上时靠 fresh 重启逃生——先不要,`budget` 到顶就升级。
 
-(机械/`freeze` 叶子是另一条线:无状态重跑/结构性重编,不在此语义内。)
+(机械操作不进叶子语义,由蒸馏期调通的自包含**工具**承担,活 agent 按名调用——见 §5.1。)
 
 ## 5.1 自包含工具(`tools`)与按需注入
 
@@ -188,65 +189,44 @@ verify: { intent: <判什么>, ground?: [<取证手段>], n?: <判官数> }   # 
 
 ## 8. 完整示例:safeline-3 回归守望
 
-见 `examples/safeline3-watchdog.yaml`(下节内容)。三段:① 一个 agent 干完整管道
-(对账→编译→部署→跑测) ② 可复现性分诊(复跑,只判 flaky) ③ 仅确定性失败才归因
-(`when` gate + fanout 3 判官只读代码分析 + 投票)。
+完整可跑的版本(含调通的 `.tools/`)在 `piper-agents` 仓库;本仓 `examples/safeline3-watchdog.yaml`
+是同结构的精简示例。三段管道:
 
 ```yaml
 agent: safeline3-回归守望
 loop:
-  on: 查 safeline-3 仓库 test-agent 分支最新 commit 完整 sha,打到 stdout(只读)
+  on: 查 origin/master 最新一次合入的完整 sha(只读;sha 没变=没有新合入)
   every: 30m
   do:
-    # ① 干活:一个 agent 连续做对账→编译→部署→跑测(状态在它自己上下文里贯通)
+    # ① 干活:一个 agent 连续 provision→编译→部署→跑测(状态在它自己上下文里贯通)
     - intent: |
-        ## 目标
-        守望 test-agent 这次提交:把它的构建部署到本 agent 专用环境,跑出 api-test 结果。
-        ## 依次做(状态贯通,别丢)
-        1. 对账环境:确保只给本 agent 用的虚拟化环境,基线=平台最新 master 每日构建;状态文件 ~/.piper-watchdog-state 认领。
-        2. 编译:隔离检出(已 checkout test-agent)交叉编译 linux/amd64 的 minion + skyview-go。
-        3. 部署:把刚编的二进制部署到这台环境(scp→备份→install→重启→确认进程)。
-        4. 跑测:unset 代理、source handoff,跑含 C1 透明代理 catch-all 的 route-proxy 全套 api-test。
-        ## 红线(软约束;硬授权由运行期 handler 兜)
-        - 只动状态文件认领的本 agent 环境;容量满绝不删别人的。
-        - 用隔离检出,不用 ~/Code/gitlab;禁止 task prepare。
-        - 部署/跑测目标只能是 handoff 的 root@10.2.39.x,严禁 ssh-waf-mgt / 10.2.81.219。
-        - 二进制必须是本次刚编的 test-agent 构建。
-        ## 输出
-        passed/failed 数 + 每个失败用例 trace;留下 handoff 供后续复跑用同一环境。
-      tools: [provision-env, build, deploy, run-apitest]   # 运行期调用的自包含脚本(蒸馏生成,在 <agent>.tools/)
-      verify:
-        intent: 确认测试确实跑在 test-master 的被测构建的本 agent 环境上,且产出了 passed/failed 计数
-        ground: [ssh 进环境查 minion/skyview-go 的 githash, 检查输出里有 pass/fail 计数]
-      budget: 5
+        守望 master 最新合入:provision 本 agent 专用环境 → 编译并部署该构建 → 跑 api-test。
+        (机械步骤都调注入的 tools;红线软约束写这里,硬授权由运行期 handler 兜。)
+      tools: [provision-env, build, deploy, run-apitest]
+      verify:                       # 独立判官:只从执行者贴出的工具输出/本地文件取证
+        intent: 确认确实部署了本次构建并跑出了 api-test 计数
+        ground: [build githash, deploy 进程状态, run-apitest 的 passed/failed 计数]
+      budget: 4
 
-    # ② 可复现性分诊:只判复现、不判根因(复跑当前构建,副作用只一次)
-    - intent: |
-        看上一步 api-test 结果,做可复现性分诊(只判复现,不判根因):
-        - 全部通过 → 「测试通过」。
-        - 有失败 → source handoff 用同一环境,复跑失败用例 + 全量(当前构建):
-          - 不再复现 / 间歇 → 「flaky」。
-          - 确定性复现 → 「确定性失败」。
-        输出标签 + 证据。
+    # ② 可复现性分诊:只判复现、不判根因
+    - intent: 看 api-test 结果——全过→「测试通过」;有失败则复跑判定→「flaky」或「确定性失败」。
+      tools: [run-apitest]
       labels: [测试通过, flaky, 确定性失败]
 
-    # ③ 归因:仅"确定性失败"才跑;3 判官只从代码/历史静态分析,投票出一个明确结论
+    # ③ 归因:仅"确定性失败"才跑;3 个不同模型的判官只读静态分析,投票出一个结论
     - fanout:
         when: 确定性失败
-        over: [{}, {model: qwen-max}, {model: glm-4-plus}]
+        over: [{model: deepseek-v4-pro}, {model: glm-5.2}, {model: kimi-k2.7-code}]
         intent: |
-          确定性复现的失败。只从代码与历史静态分析(只读:相关产品代码、本次 diff、git blame、日志),定性:
-          - 真回归:本次改动引入(diff 触及失败路径 / blame 指向本次提交)。
-          - 既有问题:bug 在本次未改动的代码里 / blame 指向早先提交 → 早先 MR 或上游引入(非本次)。
-          - 测试bug:测试用例自身问题(断言/前置假设错)。
-          - 版本错位:被测构建版本不对。
-          不复跑旧基线,真回归/既有是基于代码的推断;把握不足就降置信。
-          给标签 + 置信度 + 每条引用实际取证(代码/diff/blame/日志)的证据。
-        gather:
-          how: vote
-          labels: [真回归, 既有问题, 测试bug, 版本错位]
-        concurrency: 3
+          确定性失败,只从代码与历史静态分析(diff/git blame/日志)定性:
+          真回归 / 既有问题 / 测试bug / 版本错位。每条结论引用实际取证。
+        gather: { how: vote, labels: [真回归, 既有问题, 测试bug, 版本错位] }
+        concurrency: 1
 ```
+
+- **主控用 `default_model`,只有归因 fanout 分流多个模型**(模型多样性 + 横评 benchmark)。
+- 引擎日志把每个 agent 的输出按 `[角色·模型]` 标注(执行/分诊/验收/归因#N · 各自模型),
+  grep 即可分离某 agent / 某模型的全部输出。
 
 ## 9. 砍掉了什么 + 为什么
 
@@ -255,17 +235,18 @@ loop:
 | `route` | 模型版 if-else;简单决策该在 agent 上下文里做。真要 N 路结构派发再刻意加 |
 | `repeat` | 拆解吸收:时间/触发重复=`loop`;目标重试=`verify`+`budget`(续会话);loop-until-dry 小众,defer |
 | `sequence` 关键字 | 列表天生有序,无需包裹键 |
-| `retry`/旋钮 | 活叶子只 `continue`(续会话);`fresh` 只服务 freeze 那条线,不在 verify 词汇里 |
+| `retry`/旋钮 | 活叶子只 `continue`(续会话收敛),没有 `fresh`/`retry` 旋钮 |
 | `task`/`nl` | 叶子不该叫 agent 原语;统一 `intent`(描述工作,执行模式交引擎) |
 | `guard`/`danger`/授权 | 安全=部署级运行期策略,不是 agent 编排词汇;红线软提示进 intent |
 | `produced` | 显式数据流 defer;隐式上下文 + handoff 真文件够用 |
 | `escalate_if` | vote 只负责定性;拿到 label 后怎么路由是下游/`when` 的事 |
+| `compile`/`crystallize`/`freeze`/`steps`/`guard`(三阶段) | 早期把每步 NL 编译成钉死 `.sh` 入仓的形态;改为引擎活解释 YAML、机械操作下放给自包含 `tools`,整条删除 |
 
 ## 10. 词汇全集
 
 ```
 结构:   loop(on/every/do) · 列表=顺序 · fanout(when?/over/intent?/gather/concurrency?)
-叶子:   裸串 | {intent, verify?, budget?, labels?, model?, tools?, using?, cwd?, freeze?}
+叶子:   裸串 | {intent, verify?, budget?, labels?, model?, tools?, using?, cwd?, when?}
 验收:   verify: string | {intent, ground?, n?}
 判官:   叶子带 labels → {label,confidence,evidence};fanout+gather:vote = panel
 条件:   when: <label>(机械配紧邻上一步 label,gate 结构)
@@ -274,16 +255,19 @@ loop:
 提示词: intent(字符串/markdown,统一所有提示词,引擎不解析)
 ```
 
-## 11. 落地 TODO(改 schema/引擎)
+## 11. 实现映射(`src/v2`)
 
-1. **schema**:typebox 封闭递归 union(节点四形态)+ `intent` 强制字符串 + `findUnknownKey` 报精确路径。
-2. **引擎映射**:`leaf→agent()`、`列表→pipeline()`、`fanout→parallel()+gather`、`when→机械 label 比对`。
-3. **活叶子执行**:续会话收敛(verify 回合间把关 + budget);`submit_result`/`submit_verdict` 显式产出,
-   transcript 进日志(改掉现状"拼 text_delta 当 output")。
-4. **判官**:`labels` 装配 verdict schema;`gather:vote` 纯 JS 投票。
-5. **tools**:`<agent>.tools/*.sh` 自包含脚本 + 头部文档;引擎按叶子 `tools:[...]` 注入文档到该 agent;静态自包含检查。
-6. **安全**:危险工具调用经注入的 escalation handler;自管闸作为可选 handler,部署级注入。
-7. **freeze**:可选,把机械叶子直接当脚本跑(无 agent);与 tools 同种自包含产物。
+| 设计 | 实现 |
+|---|---|
+| 节点四形态(裸串/叶子/fanout/列表) | `engine.ts` `Node` union + `isLeaf`/`isFanout` 判别(YAML 类型分派,无独立 schema 校验) |
+| 列表=顺序、`fanout`、`when` | `runList`(prior/history 线程)、`runFanout`(over→并发 cap→`gather:vote` 多数票)、`runNode` 里 `when` 机械配 label |
+| 活叶子续会话收敛 | `runLeaf`:一个 pi 会话续跑,verify 回合间把关,到 `budget` 升级 |
+| 判官 / 投票 | 叶子带 `labels` → `submit_verdict`;`gather:vote` 纯 JS 投票 |
+| 运行期契约 | `submit_result`/`submit_verdict` 用 `defineTool`,transcript→`observe()` 进日志(带 `[角色·模型]` 标签) |
+| tools 按需注入 | `injectTools`/`toolDoc` 读 `<agent>.tools/<name>.sh` 头部,按叶子 `tools:[...]` 注入 |
+| 模型/网关 | `resolveModel`(`config.ts`)+ `backendForModel`(`session.ts`,进程内注册 provider) |
+
+> 安全(危险工具经升级 handler、自管闸)是运行期注入的策略(§7),由宿主 runner 配,不在引擎核心。
 
 ## 12. 蒸馏(Claude Code,authoring)
 
@@ -293,6 +277,6 @@ loop:
 2. 写 **agent YAML**(编排:loop/列表/fanout/when/intent/verify/tools…)。
 3. 写 **`<agent>.tools/*.sh`**(自包含工具脚本,粒度自定,每个带文档头;满足自包含+可独立测+单一操作)。
 4. **实地调试**:真跑每个工具脚本,验证能用、修 bug;跑通才提交。
-5. 提交 YAML + tools + manifest(从工具头派生的索引)。
+5. 提交 agent YAML + `<agent>.tools/*.sh`(+ 项目侧 runner:设 cwd/toolsDir、监控循环)。
 
 漂移:工具是快照;上游 API/skill 变了靠运行期 verify+判官发现,或重新蒸馏。

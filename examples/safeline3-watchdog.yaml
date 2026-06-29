@@ -1,55 +1,53 @@
 # safeline-3 回归守望 —— Piper agent 编排 YAML 示例(见 DESIGN.md)
 # 三段:① 一个 agent 干完整管道  ② 可复现性分诊  ③ 仅确定性失败才归因
+# 完整可跑版(含调通的 .tools/)在 piper-agents 仓库;本文件是同结构的精简示例。
 agent: safeline3-回归守望
 loop:
-  on: 查 safeline-3 仓库 test-agent 分支最新 commit 完整 sha,打到 stdout(只读)
+  on: 查 origin/master 最新一次合入(HEAD)的完整 sha + 标题,打到 stdout(只读;sha 没变=没有新合入)
   every: 30m
   do:
-    # ① 干活:一个 agent 连续做对账→编译→部署→跑测(状态在它自己上下文里贯通)
+    # ① 干活:一个 agent 连续做 provision→编译→部署→跑测(状态在它自己上下文里贯通)
     - intent: |
         ## 目标
-        守望 test-agent 这次提交:把它的构建部署到本 agent 专用环境,跑出 api-test 结果。
-        ## 依次做(状态贯通,别丢)
-        1. 对账环境:确保只给本 agent 用的虚拟化环境,基线=平台最新 master 每日构建;状态文件 ~/.piper-watchdog-state 认领;没有/失效→新建,落后→删旧重建,running且最新→复用。
-        2. 编译:隔离检出(已 checkout test-agent)交叉编译 linux/amd64 的 minion(hardware tag)+ skyview-go。
-        3. 部署:把刚编的二进制部署到这台环境(scp→备份→install→重启→确认进程 active/RUNNING)。
-        4. 跑测:unset 代理、source handoff,跑含 C1 透明代理 catch-all 的 route-proxy 全套 api-test。
+        守望 master 最新合入:provision 本 agent 专用环境 → 编译并部署该构建 → 跑 api-test。
+        ## 依次做(用注入的工具;状态贯通)
+        1. provision-env:确保只给本 agent 用的虚拟化环境(状态文件认领),拿 handoff。
+        2. build:隔离检出 checkout master,交叉编译 skyview-go + minion(两个都编;代理配置在 minion 渲染)。
+        3. deploy:把刚编的二进制部署到 handoff 环境(默认两个都部)。
+        4. run-apitest:跑 protected-object/route-proxy 全套。
         ## 红线(软约束;硬授权由运行期 handler 兜)
         - 只动状态文件认领的本 agent 环境;容量满绝不删别人的 → 停下报错。
-        - 用隔离检出,不用 skill 默认的 ~/Code/gitlab;禁止 task prepare。
-        - 部署/跑测目标只能是 handoff 的 root@10.2.39.x,严禁 ssh-waf-mgt / 10.2.81.219。
-        - 二进制必须是本次刚编的 test-agent 构建,不要用别处的陈旧产物。
+        - 用隔离检出,不用 ~/Code/gitlab;禁止 task prepare;部署只到 handoff 的 root@10.2.39.x。
         ## 输出
-        passed/failed 数 + 每个失败用例 trace;留下 handoff 供后续复跑用同一环境。
-      tools: [provision-env, build, deploy, run-apitest]   # 运行期调用的自包含脚本(蒸馏生成,在 <agent>.tools/)
+        原样回贴 run-apitest 末尾的 `N passed / M failed` 计数 + 失败用例 trace;留下 handoff 供复跑。
+      tools: [provision-env, build, deploy, run-apitest]
       verify:
-        intent: 确认测试确实跑在 test-master 被测构建的本 agent 环境上,且产出了 passed/failed 计数
-        ground: [ssh 进环境查 minion/skyview-go 的 githash, 检查输出里有 pass/fail 计数]
-      budget: 5
+        intent: 确认确实部署了本次 master 构建并跑出了 api-test 计数(只从工具输出/本地文件取证,别自己 ssh)
+        ground: [build githash, deploy 的进程状态, run-apitest 的 passed/failed 计数]
+      budget: 4
 
     # ② 可复现性分诊:只判复现、不判根因(复跑当前构建,副作用只一次)
     - intent: |
         看上一步 api-test 结果,做可复现性分诊(只判复现,不判根因):
         - 全部通过 → 「测试通过」。
-        - 有失败 → source handoff 用同一环境,复跑失败用例 + 全量(当前构建):
-          - 不再复现 / 间歇(超时·连接重置)→ 「flaky」。
-          - 确定性复现 → 「确定性失败」。
-        输出标签 + 证据(复跑了什么、是否复现)。
+        - 有失败 → 复跑失败用例 + 全量(当前构建):不再复现/间歇 → 「flaky」;确定性复现 → 「确定性失败」。
+        输出标签 + 证据。
+      tools: [run-apitest]
       labels: [测试通过, flaky, 确定性失败]
 
-    # ③ 归因:仅"确定性失败"才跑;3 判官只从代码/历史静态分析,投票出一个明确结论
+    # ③ 归因:仅"确定性失败"才跑;3 个不同模型的判官只读静态分析,投票出一个结论
     - fanout:
         when: 确定性失败
-        over: [{}, { model: qwen-max }, { model: glm-4-plus }]
+        # 主控用 default_model;只有归因 fanout 分流多个模型(模型多样性 + 横评 benchmark)
+        over: [{ model: deepseek-v4-pro }, { model: glm-5.2 }, { model: kimi-k2.7-code }]
         intent: |
           确定性复现的失败。只从代码与历史静态分析(只读:相关产品代码、本次 diff、git blame、日志),定性:
           - 真回归:本次改动引入(diff 触及失败路径 / blame 指向本次提交)。
-          - 既有问题:bug 在本次未改动的代码里 / blame 指向早先提交 → 早先 MR 或上游引入(非本次)。
+          - 既有问题:bug 在本次未改动的代码里 / blame 指向早先提交(非本次)。
           - 测试bug:测试用例自身问题(断言/前置假设错)。
           - 版本错位:被测构建版本不对(用例假定修复还没进这个 build)。
-          不复跑旧基线,真回归/既有是基于代码的推断;把握不足就降置信。
           给标签 + 置信度 + 每条引用实际取证(代码/diff/blame/日志)的证据。
         gather:
           how: vote
           labels: [真回归, 既有问题, 测试bug, 版本错位]
-        concurrency: 3
+        concurrency: 1

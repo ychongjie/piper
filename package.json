@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "厚编排层(test-time compute + 客观验收)构建在 pi SDK 之上",
+  "description": "agent 编排引擎:封闭声明式 YAML(loop/do/fanout/verify/intent/tools)活解释,跑在 pi + 便宜模型上",
   "exports": {
     ".": "./src/index.ts",
     "./v2": "./src/v2/run.ts"

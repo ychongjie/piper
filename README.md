@@ -1,46 +1,55 @@
 # Piper
 
 通用 agent 编排**引擎**(TypeScript,构建在 [pi](https://github.com/earendil-works/pi) SDK 之上)。
-给个人开发提供 Claude Code 之外的另一个选择:更自动化、更便宜(国产模型)、更可定制。
+把一段**重复的 Claude Code 工作**蒸馏成一份**声明式 YAML**,运行时由 **pi + 国产便宜模型**实际执行。
 
-**北极星**:用接近 SOTA 的便宜国产模型 + 大量自动化 **test-time compute** + 接地验证,跑出强模型
-单次推理的效果——**厚 Piper(通用编排层,写一次)+ 薄声明式 agent spec(项目/任务专属,由 Claude
-从历史 session 编译出来)**。完整设计见 **[docs/DESIGN.md](docs/DESIGN.md)**,与 Claude Dynamic
-Workflows 的差异化定位见 DESIGN 同名小节,引擎如何构建在 pi 上见 [docs/pi-capabilities.md](docs/pi-capabilities.md)。
+**北极星**:用接近 SOTA 的便宜国产模型 + 大量自动化 **test-time compute**(冗余/投票)+ 接地验证,
+跑出强模型单次推理的效果。**强作者 / 弱执行**:贵的强模型(Claude Code)一次性写好并**调通** YAML
+和工具脚本;便宜模型运行期只**活解释 YAML、调用已调通的脚本**,不现推操作细节。
 
-**本仓库只放通用引擎,零项目耦合。** 具体项目的 agent(薄层 spec + glue)住单独的私有仓库
-`piper-agents`,通过 `"piper": "file:../piper"` 依赖本引擎;第一个真实样本是 safeline-3 api-test
-回归守望(见 piper-agents)。
+完整设计见 **[DESIGN.md](DESIGN.md)**;引擎如何复用 pi SDK 见 [docs/pi-capabilities.md](docs/pi-capabilities.md)。
 
-## 引擎模块(厚层,`bun test` 全绿)
+## 两阶段
+
+```
+蒸馏(Claude Code 强模型,离线)   产出并入仓:
+  ① agent YAML(编排:loop/do/fanout/verify/intent/tools…)
+  ② <agent>.tools/*.sh(自包含工具脚本,粒度自定,每个带文档头)
+  ③ 实地调试这些脚本(真跑、验证、修 bug)
+执行(piper 引擎 + 便宜模型,运行期)
+  活 agent 跑 YAML,按名调用入仓的自包含工具;脚本兜不住的异常 agent 兜
+```
+
+**本仓库只放通用引擎,零项目耦合。** 具体项目的 agent(YAML + `.tools/` + runner)住单独的
+`piper-agents` 仓库,通过 `"piper": "file:../piper"` 依赖本引擎;第一个真实样本是 safeline-3
+api-test 回归守望(见 piper-agents)。
+
+## 引擎(`bun test` 全绿)
 
 | 模块 | 内容 |
 |---|---|
-| `src/session.ts` | pi 会话 + **可注入后端**(`setBackend`/`getBackend`/`createPiSession`)——引擎不绑死具体模型 |
-| `src/check.ts` | 客观验收抽象(`shellCheck`/`fnCheck`)——不信 agent 自报 |
-| `src/goal.ts` | `goal` 外环:验收→派 worker→失败带反馈重派 |
-| `src/ttc.ts` | test-time compute:`structuredWorker`/`bestOfN`/`debate` + 接地 |
-| `src/loop.ts` | 定时/轮询守望 + 状态持久化续跑 |
-| `src/escalate.ts` | 升级:授权闸(`beforeToolCall`)+ bestOfN 不收敛兜底 |
-| `src/spec.ts` | **spec 引擎**:跑声明式 agent spec(detect→run→verify→修复表→归因→升级→授权) |
-| `src/observe.ts` | 观测:实时控制台 + `logs/` 落盘复盘 |
-| `src/verifiers/git.ts` | 通用 `git_diff_touches`(只读,参数化 repo) |
-| `src/ci/gitlab.ts` | 通用 GitLab 只读访问(`gitlabReader(project)`) |
-| `src/sh.ts` / `src/index.ts` | shell 执行 / 公开导出面 |
+| `src/v2/engine.ts` | **活引擎**:封闭 YAML(loop/do/list/fanout/verify/intent/tools/labels/when)活解释。活叶子续会话收敛、判官独立取证、fanout 投票、按需注入工具文档;每行输出带 `[角色·模型]` 标签便于分析/benchmark |
+| `src/v2/run.ts` | 入口:`loadAgentV2` + `runOnce`(跑一个 tick:触发器 → do 树) |
+| `src/session.ts` | pi 会话 + **进程内**注册便宜模型 provider(`backendForModel`/`setBackendOverride`,不碰全局 pi 配置) |
+| `src/config.ts` | 网关 + 标准模型名映射(`resolveModel`;`~/.piper/config.json`) |
+
+词汇与执行语义见 DESIGN.md。
 
 ## 用作依赖
 
 ```ts
 // piper-agents 里:
-import { goal, bestOfN, debate, loop, runSpec, resolveOrEscalate, setBackend } from "piper";
-setBackend(myCheapModelSession);   // 注入你的便宜模型后端
+import { loadAgentV2, runOnce } from "piper/v2";
+const a = loadAgentV2(readFileSync("agents/<x>.v2.yaml", "utf8"));
+await runOnce(a, { cwd, toolsDir, runTrigger: true, onLog: console.error });
 ```
 
 ```sh
-bun test    # 引擎单测(mock/合成,不打网络、不花钱)
+piper run <agent.yaml> [--cwd DIR] [--tools DIR] [--no-trigger]   # 跑一个 tick
+bun test                                                          # 引擎单测(mock/合成,不打网络、不花钱)
 ```
 
-## 实施纪律(见 DESIGN)
+## 配置
 
-先具体后泛化:先把第一个 agent 具体做通(在 piper-agents),两个数据点之前不泛化;
-厚层每加一个原语,都要被 ≥2 个薄 spec 真用到。
+`~/.piper/config.json`:网关 base_url + `api`(端点类型,如 `anthropic-messages`)+ `api_key_env`
++ 标准模型名 → 网关 modelId 映射。key 放环境变量(如 `BAIZHI_API_KEY`),不入仓。
