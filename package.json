@@ -5,7 +5,8 @@
   "type": "module",
   "description": "厚编排层(test-time compute + 客观验收)构建在 pi SDK 之上",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./v2": "./src/v2/run.ts"
   },
   "bin": {
     "piper": "./bin/piper.ts"
